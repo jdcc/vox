@@ -1,4 +1,4 @@
-.PHONY: build run stop logs client server tui check install clean setup setup-full start start-bg
+.PHONY: build run stop logs client server tui check install clean setup setup-full start start-bg build-overlay install-overlay
 
 # =============================================================================
 # Quick Start (from clean machine)
@@ -6,7 +6,7 @@
 
 # Full setup: system deps + python deps + config + model download
 # Note: Does NOT add to input group (requires logout). Run 'make setup-full' for that.
-setup: install-deps install config-init models-download
+setup: install-deps install install-overlay config-init models-download
 	@echo ""
 	@echo "=========================================="
 	@echo "Setup complete!"
@@ -22,7 +22,7 @@ setup: install-deps install config-init models-download
 	@echo ""
 
 # Full setup including input group (will require logout/login after)
-setup-full: install-deps install config-init models-download add-input-group
+setup-full: install-deps install install-overlay config-init models-download add-input-group
 	@echo ""
 	@echo "=========================================="
 	@echo "Setup complete!"
@@ -89,17 +89,24 @@ check:
 
 # Setup commands
 install:
-	uv venv --python /usr/bin/python3 --system-site-packages --allow-existing
+	uv venv --allow-existing
 	uv sync
 
 install-deps:
-	sudo apt install -y wl-clipboard ydotool libportaudio2 \
-		python3-gi gir1.2-ayatanaappindicator3-0.1
+	sudo apt install -y wl-clipboard ydotool libportaudio2 libgtk-4-dev libgtk4-layer-shell-dev
 	@echo ""
 	@echo "Setting up uinput permissions for ydotool..."
 	@echo 'KERNEL=="uinput", GROUP="input", MODE="0660"' | sudo tee /etc/udev/rules.d/80-uinput.rules > /dev/null
 	sudo udevadm control --reload-rules
 	sudo udevadm trigger
+	@echo ""
+	@if ! command -v cargo >/dev/null 2>&1; then \
+		echo "Installing Rust via rustup..."; \
+		curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; \
+		echo "Rust installed. Run 'source ~/.cargo/env' or restart your shell."; \
+	else \
+		echo "Rust already installed."; \
+	fi
 	@echo ""
 	@echo "Done! You may need to log out/in for uinput group access."
 
@@ -120,6 +127,16 @@ config-init:
 
 config-show:
 	uv run vox config show
+
+# Overlay commands
+build-overlay:
+	cd overlay && cargo build --release
+
+install-overlay: build-overlay
+	mkdir -p ~/.local/bin
+	cp overlay/target/release/vox-overlay ~/.local/bin/
+	@echo "Installed vox-overlay to ~/.local/bin/"
+	@echo "Make sure ~/.local/bin is in your PATH"
 
 # Clean commands
 clean:
@@ -166,3 +183,7 @@ help:
 	@echo "Models:"
 	@echo "  make models-list     - List available models"
 	@echo "  make models-download - Download default model (small.en)"
+	@echo ""
+	@echo "Overlay (visual indicator):"
+	@echo "  make build-overlay   - Build the Rust overlay binary"
+	@echo "  make install-overlay - Build and install to ~/.local/bin"

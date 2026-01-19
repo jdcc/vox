@@ -200,7 +200,6 @@ def check() -> None:
     """Check system dependencies and permissions."""
     from vox.client.hotkey import check_input_permissions
     from vox.client.output import check_wayland_tools, check_ydotool_daemon
-    from vox.client.tray import check_tray_support
 
     click.echo("Checking system dependencies...")
     click.echo()
@@ -225,18 +224,6 @@ def check() -> None:
             click.echo()
             click.echo("ydotool needs write access to /dev/uinput.")
             click.echo("Run 'make install-deps' to set up udev rules, then log out/in.")
-
-    click.echo()
-    click.echo("Tray icon support:")
-    tray = check_tray_support()
-    for name, available in tray.items():
-        status = click.style("OK", fg="green") if available else click.style("NO", fg="yellow")
-        click.echo(f"  {name}: {status}")
-
-    if tray["wayland"] and not tray["appindicator"]:
-        click.echo()
-        click.echo("For tray icon on Wayland, install:")
-        click.echo("  sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1")
 
     click.echo()
     click.echo("Input permissions:")

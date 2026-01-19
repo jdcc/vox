@@ -36,6 +36,13 @@ class OutputConfig(BaseModel):
     typing_method: Literal["paste", "type"] = "paste"
 
 
+class OverlayConfig(BaseModel):
+    """Overlay indicator configuration."""
+
+    enabled: bool = True
+    position: Literal["top-right", "top-center", "bottom-right"] = "top-right"
+
+
 class LLMConfig(BaseModel):
     """LLM provider configuration."""
 
@@ -66,6 +73,7 @@ class Config(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     model: ModelConfig = Field(default_factory=ModelConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
+    overlay: OverlayConfig = Field(default_factory=OverlayConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
 
 
@@ -131,6 +139,10 @@ model:
 output:
   method: both               # clipboard, type, both
   typing_method: paste       # Ctrl+V approach
+
+overlay:
+  enabled: true              # Show visual indicator
+  position: top-right        # top-right, top-center, bottom-right
 
 agent:
   enabled: true

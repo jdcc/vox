@@ -1,0 +1,15 @@
+[package]
+name = "vox-overlay"
+version = "0.1.0"
+edition = "2021"
+description = "Visual overlay indicator for vox speech-to-text"
+
+[dependencies]
+gtk4 = "0.9"
+gtk4-layer-shell = "0.4"
+clap = { version = "4", features = ["derive"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true

@@ -3,15 +3,13 @@
 import asyncio
 import logging
 import signal
-import sys
-from typing import Callable
 
 from vox.config import Config, load_config
 from vox.client.audio import AudioRecorder
 from vox.client.connection import ConnectionState, ServerConnection, TranscriptionResponse
 from vox.client.hotkey import HotkeyListener, check_input_permissions
 from vox.client.output import OutputHandler, check_wayland_tools
-from vox.client.tray import TrayIcon, TrayState
+from vox.client.overlay import Overlay
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +37,9 @@ class Client:
             on_transcription=self._on_transcription,
         )
         self.hotkey: HotkeyListener | None = None
-        self.tray = TrayIcon(
-            on_open_tui=self._on_open_tui,
-            on_quit=self._on_quit,
+        self.overlay = Overlay(
+            position=self.config.overlay.position,
+            enabled=self.config.overlay.enabled,
         )
 
         self._running = False
@@ -56,9 +54,9 @@ class Client:
             state: New connection state
         """
         if state == ConnectionState.CONNECTED:
-            self.tray.set_state(TrayState.CONNECTED)
+            logger.info("Connected to server")
         elif state == ConnectionState.DISCONNECTED:
-            self.tray.set_state(TrayState.DISCONNECTED)
+            logger.info("Disconnected from server")
 
     def _on_transcription(self, response: TranscriptionResponse) -> None:
         """Handle transcription results.
@@ -71,6 +69,7 @@ class Client:
         else:
             logger.info(f"Final text: {response.text}")
             self._pending_output = response.text
+            self.overlay.success()
 
             if self._loop:
                 asyncio.run_coroutine_threadsafe(
@@ -91,7 +90,7 @@ class Client:
         """Handle hotkey press (start recording)."""
         if not self._is_recording and self.connection.is_connected:
             self._is_recording = True
-            self.tray.set_state(TrayState.RECORDING)
+            self.overlay.recording()
             self.audio.start_recording()
             logger.info("Recording started")
 
@@ -99,7 +98,7 @@ class Client:
         """Handle hotkey release (stop recording and send audio)."""
         if self._is_recording:
             self._is_recording = False
-            self.tray.set_state(TrayState.CONNECTED)
+            self.overlay.processing()
             audio_bytes = self.audio.stop_recording()
             logger.info(f"Recording stopped, {len(audio_bytes)} bytes")
 
@@ -108,18 +107,6 @@ class Client:
                     self.connection.send_audio(audio_bytes),
                     self._loop,
                 )
-
-    def _on_open_tui(self) -> None:
-        """Handle open TUI menu click."""
-        logger.info("Opening TUI...")
-
-    def _on_quit(self) -> None:
-        """Handle quit menu click."""
-        logger.info("Quit requested")
-        self._running = False
-
-        if self._loop:
-            self._loop.call_soon_threadsafe(self._loop.stop)
 
     async def start(self) -> None:
         """Start the client."""
@@ -139,7 +126,7 @@ class Client:
                 "Install with: sudo apt install wl-clipboard wtype"
             )
 
-        self.tray.start()
+        self.overlay.start()
 
         await self.connection.start()
 
@@ -174,7 +161,7 @@ class Client:
 
         await self.connection.disconnect()
         self.audio.close()
-        self.tray.stop()
+        self.overlay.stop()
 
         logger.info("Client stopped")
 
