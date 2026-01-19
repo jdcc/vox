@@ -1,0 +1,20 @@
+models:
+  - id: tiny.en
+    name: Tiny (English)
+    size: 75MB
+    repo: Systran/faster-whisper-tiny.en
+
+  - id: base.en
+    name: Base (English)
+    size: 145MB
+    repo: Systran/faster-whisper-base.en
+
+  - id: small.en
+    name: Small (English)
+    size: 488MB
+    repo: Systran/faster-whisper-small.en
+
+  - id: medium.en
+    name: Medium (English)
+    size: 1.5GB
+    repo: Systran/faster-whisper-medium.en
