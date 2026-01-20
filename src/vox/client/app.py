@@ -113,7 +113,7 @@ class Client:
         self._loop = asyncio.get_event_loop()
 
         # Check if GNOME extension is available
-        if not check_extension_available():
+        if not await check_extension_available():
             logger.warning(
                 "Vox GNOME Shell extension not available. "
                 "Install with: make install-extension\n"
@@ -129,7 +129,7 @@ class Client:
                 "Install with: sudo apt install wl-clipboard wtype"
             )
 
-        self.overlay.start()
+        await self.overlay.start()
 
         await self.connection.start()
 
@@ -164,7 +164,7 @@ class Client:
 
         await self.connection.disconnect()
         self.audio.close()
-        self.overlay.stop()
+        await self.overlay.stop()
 
         logger.info("Client stopped")
 

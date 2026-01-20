@@ -1,11 +1,12 @@
 """Overlay indicator control via GNOME Shell extension D-Bus interface."""
 
+import asyncio
 import logging
 from enum import Enum
 from typing import Literal
 
-from dasbus.connection import SessionMessageBus
-from dasbus.error import DBusError
+from dbus_next.aio import MessageBus
+from dbus_next.errors import DBusError
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ OverlayPosition = Literal["top-right", "top-center", "bottom-right"]
 
 DBUS_NAME = "org.vox.Extension"
 DBUS_PATH = "/org/vox/Extension"
+DBUS_INTERFACE = "org.vox.Extension"
 
 
 class Overlay:
@@ -38,36 +40,36 @@ class Overlay:
         """
         self._position = position
         self._enabled = enabled
-        self._proxy = None
+        self._bus = None
+        self._interface = None
         self._available = False
+        self._loop = None
 
-    def _get_proxy(self):
-        """Get or create the D-Bus proxy."""
-        if self._proxy is not None:
-            return self._proxy
+    async def _connect(self) -> bool:
+        """Connect to the D-Bus service."""
+        if self._interface is not None:
+            return True
 
         try:
-            bus = SessionMessageBus()
-            self._proxy = bus.get_proxy(DBUS_NAME, DBUS_PATH)
+            self._bus = await MessageBus().connect()
+            introspection = await self._bus.introspect(DBUS_NAME, DBUS_PATH)
+            proxy = self._bus.get_proxy_object(DBUS_NAME, DBUS_PATH, introspection)
+            self._interface = proxy.get_interface(DBUS_INTERFACE)
             self._available = True
-            return self._proxy
+            return True
         except DBusError as e:
             logger.debug(f"Failed to connect to D-Bus service: {e}")
             self._available = False
-            return None
+            return False
 
     @property
     def available(self) -> bool:
         """Check if overlay is available and enabled."""
         if not self._enabled:
             return False
-        if self._available:
-            return True
-        # Try to connect
-        self._get_proxy()
         return self._available
 
-    def start(self) -> None:
+    async def start(self) -> None:
         """Initialize connection to the extension.
 
         The GNOME Shell extension runs independently, so we just verify connectivity.
@@ -75,8 +77,9 @@ class Overlay:
         if not self._enabled:
             return
 
-        proxy = self._get_proxy()
-        if proxy is None:
+        self._loop = asyncio.get_event_loop()
+
+        if not await self._connect():
             logger.debug(
                 "Vox GNOME Shell extension not available. "
                 "Run 'make install-extension' and enable with "
@@ -86,16 +89,38 @@ class Overlay:
 
         logger.debug("Connected to Vox GNOME Shell extension")
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         """Cleanup D-Bus connection."""
         # Hide indicator before disconnecting
-        if self._proxy is not None:
+        if self._interface is not None:
             try:
-                self._proxy.SetState("hidden")
+                await self._interface.call_set_state("hidden")
             except Exception:
                 pass
-        self._proxy = None
+
+        if self._bus:
+            self._bus.disconnect()
+            self._bus = None
+
+        self._interface = None
         logger.debug("Disconnected from overlay extension")
+
+    async def _set_state_async(self, state: OverlayState) -> None:
+        """Set the overlay state asynchronously.
+
+        Args:
+            state: New overlay state
+        """
+        if not self._enabled or self._interface is None:
+            return
+
+        try:
+            await self._interface.call_set_state(state.value)
+            logger.debug(f"Overlay state: {state.value}")
+        except DBusError as e:
+            logger.debug(f"Failed to set overlay state: {e}")
+            self._available = False
+            self._interface = None
 
     def set_state(self, state: OverlayState) -> None:
         """Set the overlay state.
@@ -103,20 +128,11 @@ class Overlay:
         Args:
             state: New overlay state
         """
-        if not self._enabled:
+        if not self._enabled or self._interface is None:
             return
 
-        proxy = self._get_proxy()
-        if proxy is None:
-            return
-
-        try:
-            proxy.SetState(state.value)
-            logger.debug(f"Overlay state: {state.value}")
-        except DBusError as e:
-            logger.debug(f"Failed to set overlay state: {e}")
-            self._available = False
-            self._proxy = None
+        if self._loop is not None:
+            asyncio.run_coroutine_threadsafe(self._set_state_async(state), self._loop)
 
     def recording(self) -> None:
         """Show recording indicator."""
@@ -138,9 +154,9 @@ class Overlay:
         """Hide the overlay."""
         self.set_state(OverlayState.HIDDEN)
 
-    def __enter__(self) -> "Overlay":
-        self.start()
+    async def __aenter__(self) -> "Overlay":
+        await self.start()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        self.stop()
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.stop()

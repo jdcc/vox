@@ -1,12 +1,10 @@
 """Global hotkey handling via GNOME Shell extension D-Bus signals."""
 
-import asyncio
 import logging
 from typing import Callable
 
-from dasbus.connection import SessionMessageBus
-from dasbus.error import DBusError
-from dasbus.loop import EventLoop
+from dbus_next.aio import MessageBus
+from dbus_next.errors import DBusError
 
 logger = logging.getLogger(__name__)
 
@@ -35,18 +33,16 @@ class HotkeyListener:
         self.on_press = on_press
         self.on_release = on_release
         self._running = False
-        self._proxy = None
         self._bus = None
-        self._event_loop = None
-        self._loop_task = None
-        self._press_subscription = None
-        self._release_subscription = None
+        self._interface = None
 
     async def start(self) -> None:
         """Start listening for hotkey signals from the GNOME extension."""
         try:
-            self._bus = SessionMessageBus()
-            self._proxy = self._bus.get_proxy(DBUS_NAME, DBUS_PATH)
+            self._bus = await MessageBus().connect()
+            introspection = await self._bus.introspect(DBUS_NAME, DBUS_PATH)
+            proxy = self._bus.get_proxy_object(DBUS_NAME, DBUS_PATH, introspection)
+            self._interface = proxy.get_interface(DBUS_INTERFACE)
         except DBusError as e:
             raise RuntimeError(
                 f"Failed to connect to Vox GNOME Shell extension: {e}\n"
@@ -56,54 +52,14 @@ class HotkeyListener:
                 "Then restart GNOME Shell (log out/in on Wayland)"
             ) from e
 
-        # Subscribe to D-Bus signals
-        connection = self._bus.connection
-
-        self._press_subscription = connection.signal_subscribe(
-            DBUS_NAME,
-            DBUS_INTERFACE,
-            "HotkeyPressed",
-            DBUS_PATH,
-            None,
-            0,
-            self._on_hotkey_pressed_signal,
-        )
-
-        self._release_subscription = connection.signal_subscribe(
-            DBUS_NAME,
-            DBUS_INTERFACE,
-            "HotkeyReleased",
-            DBUS_PATH,
-            None,
-            0,
-            self._on_hotkey_released_signal,
-        )
+        # Subscribe to D-Bus signals - dbus-next handles event loop integration natively
+        self._interface.on_hotkey_pressed(self._on_hotkey_pressed_signal)
+        self._interface.on_hotkey_released(self._on_hotkey_released_signal)
 
         self._running = True
+        logger.info(f"Listening for hotkey signals from GNOME extension (hotkey: {self._hotkey})")
 
-        # Run the GLib event loop in a thread to process D-Bus signals
-        self._event_loop = EventLoop()
-        self._loop_task = asyncio.create_task(self._run_event_loop())
-
-        logger.info(f"Listening for hotkey signals from GNOME extension (configured: {self._hotkey})")
-
-    async def _run_event_loop(self) -> None:
-        """Run the GLib event loop to process D-Bus signals."""
-        import gi
-        gi.require_version('GLib', '2.0')
-        from gi.repository import GLib
-
-        loop = GLib.MainLoop()
-        context = loop.get_context()
-
-        while self._running:
-            # Process pending events without blocking
-            while context.pending():
-                context.iteration(False)
-            # Yield to asyncio
-            await asyncio.sleep(0.01)
-
-    def _on_hotkey_pressed_signal(self, connection, sender, path, interface, signal, params):
+    def _on_hotkey_pressed_signal(self) -> None:
         """Handle HotkeyPressed signal from D-Bus."""
         logger.debug("Hotkey pressed (D-Bus signal)")
         try:
@@ -111,7 +67,7 @@ class HotkeyListener:
         except Exception as e:
             logger.error(f"Error in hotkey press handler: {e}")
 
-    def _on_hotkey_released_signal(self, connection, sender, path, interface, signal, params):
+    def _on_hotkey_released_signal(self) -> None:
         """Handle HotkeyReleased signal from D-Bus."""
         logger.debug("Hotkey released (D-Bus signal)")
         try:
@@ -123,39 +79,28 @@ class HotkeyListener:
         """Stop listening for hotkey signals."""
         self._running = False
 
-        if self._loop_task:
-            self._loop_task.cancel()
-            try:
-                await self._loop_task
-            except asyncio.CancelledError:
-                pass
-            self._loop_task = None
+        if self._bus:
+            self._bus.disconnect()
+            self._bus = None
 
-        if self._bus and self._bus.connection:
-            connection = self._bus.connection
-            if self._press_subscription is not None:
-                connection.signal_unsubscribe(self._press_subscription)
-                self._press_subscription = None
-            if self._release_subscription is not None:
-                connection.signal_unsubscribe(self._release_subscription)
-                self._release_subscription = None
-
-        self._proxy = None
-        self._bus = None
+        self._interface = None
         logger.info("Hotkey listener stopped")
 
 
-def check_extension_available() -> bool:
+async def check_extension_available() -> bool:
     """Check if the Vox GNOME Shell extension is available and running.
 
     Returns:
         True if extension is available
     """
     try:
-        bus = SessionMessageBus()
-        proxy = bus.get_proxy(DBUS_NAME, DBUS_PATH)
+        bus = await MessageBus().connect()
+        introspection = await bus.introspect(DBUS_NAME, DBUS_PATH)
+        proxy = bus.get_proxy_object(DBUS_NAME, DBUS_PATH, introspection)
+        interface = proxy.get_interface(DBUS_INTERFACE)
         # Try to call GetState to verify the extension is responsive
-        proxy.GetState()
+        await interface.call_get_state()
+        bus.disconnect()
         return True
     except DBusError:
         return False
