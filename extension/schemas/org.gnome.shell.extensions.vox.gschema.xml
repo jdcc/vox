@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <schemalist>
   <schema id="org.gnome.shell.extensions.vox" path="/org/gnome/shell/extensions/vox/">
-    <key name="hotkey" type="s">
-      <default>'&lt;Control&gt;space'</default>
+    <key name="hotkey" type="as">
+      <default>['&lt;Control&gt;space']</default>
       <summary>Hotkey for push-to-talk</summary>
       <description>The keyboard shortcut to hold for recording. Use GTK accelerator format.</description>
     </key>

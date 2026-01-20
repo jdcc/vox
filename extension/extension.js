@@ -8,7 +8,6 @@
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
-import GObject from 'gi://GObject';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
@@ -47,6 +46,7 @@ class VoxIndicator {
         this._pulseValue = 1.0;
         this._rotationAngle = 0;
         this._flashCount = 0;
+        this._monitorsChangedId = null;
     }
 
     create() {
@@ -57,6 +57,9 @@ class VoxIndicator {
             opacity: 0,
             reactive: false,
         });
+
+        // Make rotation behave as expected (center pivot)
+        this._widget.set_pivot_point(0.5, 0.5);
 
         // Position in top-right corner
         this._updatePosition();
@@ -100,7 +103,7 @@ class VoxIndicator {
 
         const color = STATE_COLORS[state];
         if (!color) {
-            console.warn(`Vox: Unknown state "${state}"`);
+            log(`Vox: Unknown state "${state}"`);
             return;
         }
 
@@ -136,7 +139,8 @@ class VoxIndicator {
             duration: 150,
             mode: Clutter.AnimationMode.EASE_IN_QUAD,
             onComplete: () => {
-                this._widget.add_style_class_name('vox-indicator-hidden');
+                if (this._widget)
+                    this._widget.add_style_class_name('vox-indicator-hidden');
             },
         });
     }
@@ -174,6 +178,9 @@ class VoxIndicator {
 
             this._rotationAngle = (this._rotationAngle + 10) % 360;
 
+            // Actually apply rotation (your earlier code advanced angle but never used it)
+            this._widget.rotation_angle_z = this._rotationAngle;
+
             // Pulsing scale for processing
             const pulse = Math.sin(this._rotationAngle * Math.PI / 180) * 0.1 + 1.0;
             this._widget.set_scale(pulse, pulse);
@@ -201,7 +208,7 @@ class VoxIndicator {
             }
 
             const visible = this._flashCount % 2 === 1;
-            this._widget.opacity = visible ? 255 : 100;
+            this._widget.opacity = visible ? 255 : 0;
 
             return true;
         };
@@ -244,165 +251,87 @@ class VoxHotkeyHandler {
     constructor(onPress, onRelease) {
         this._onPress = onPress;
         this._onRelease = onRelease;
+
         this._settings = null;
-        this._keyPressId = null;
-        this._keyReleaseId = null;
-        this._hotkeyActive = false;
-        this._modifierKeys = new Set();
-        this._triggerKey = null;
-        this._pressedModifiers = new Set();
-        this._triggerPressed = false;
+        this._settingsChangedId = null;
+
+        // IMPORTANT:
+        // Main.wm.addKeybinding expects the settings key used by the binding name
+        // to be a strv (type 'as') in the schema, e.g. ['<Control>space'].
+        //
+        // If your schema currently defines 'hotkey' as a string, change it to:
+        // <key name="hotkey" type="as">
+        //   <default>['&lt;Control&gt;space']</default>
+        // </key>
+        this._bindingName = 'hotkey';
+
+        // Toggle semantics: each activation flips state.
+        this._toggledOn = false;
     }
 
     enable(settings) {
         this._settings = settings;
-        this._parseHotkey();
+        this._registerOrUpdateBinding();
 
-        // Connect to key events on global stage
-        this._keyPressId = global.stage.connect('key-press-event',
-            (actor, event) => this._onKeyPress(event));
-        this._keyReleaseId = global.stage.connect('key-release-event',
-            (actor, event) => this._onKeyRelease(event));
-
-        // Re-parse hotkey when settings change
-        this._settingsChangedId = this._settings.connect('changed::hotkey',
-            () => this._parseHotkey());
+        this._settingsChangedId = this._settings.connect(`changed::${this._bindingName}`, () => {
+            this._registerOrUpdateBinding();
+        });
     }
 
-    _parseHotkey() {
-        const hotkeyStr = this._settings.get_string('hotkey');
-
-        // Parse GTK accelerator format (e.g., "<Control>space")
-        this._modifierKeys.clear();
-        this._triggerKey = null;
-
-        // Extract modifiers
-        if (hotkeyStr.includes('<Control>') || hotkeyStr.includes('<Ctrl>')) {
-            this._modifierKeys.add(Clutter.KEY_Control_L);
-            this._modifierKeys.add(Clutter.KEY_Control_R);
-        }
-        if (hotkeyStr.includes('<Shift>')) {
-            this._modifierKeys.add(Clutter.KEY_Shift_L);
-            this._modifierKeys.add(Clutter.KEY_Shift_R);
-        }
-        if (hotkeyStr.includes('<Alt>')) {
-            this._modifierKeys.add(Clutter.KEY_Alt_L);
-            this._modifierKeys.add(Clutter.KEY_Alt_R);
-        }
-        if (hotkeyStr.includes('<Super>')) {
-            this._modifierKeys.add(Clutter.KEY_Super_L);
-            this._modifierKeys.add(Clutter.KEY_Super_R);
+    _registerOrUpdateBinding() {
+        // Remove first to avoid duplicates
+        try {
+            Main.wm.removeKeybinding(this._bindingName);
+        } catch (_) {
+            // ignore
         }
 
-        // Extract trigger key (last part after all modifiers)
-        const keyMatch = hotkeyStr.match(/[^<>]+$/);
-        if (keyMatch) {
-            const keyName = keyMatch[0].toLowerCase();
-            // Map common key names to Clutter keysyms
-            const keyMap = {
-                'space': Clutter.KEY_space,
-                'return': Clutter.KEY_Return,
-                'enter': Clutter.KEY_Return,
-                'tab': Clutter.KEY_Tab,
-                'escape': Clutter.KEY_Escape,
-            };
+        Main.wm.addKeybinding(
+            this._bindingName,
+            this._settings,
+            // Prevent holding Space from spamming activations
+            Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
+            // Make it work in normal + overview; adjust if you want to exclude some modes
+            Shell.ActionMode.ALL,
+            () => this._onActivated()
+        );
 
-            this._triggerKey = keyMap[keyName] || Clutter[`KEY_${keyName}`];
+        // (Optional) log the configured accelerator for sanity
+        // Note: only works if the key type is 'as' (strv).
+        try {
+            const accel = this._settings.get_strv(this._bindingName);
+            log(`Vox: Keybinding "${this._bindingName}" registered: ${JSON.stringify(accel)}`);
+        } catch (_) {
+            log(`Vox: Keybinding "${this._bindingName}" registered (could not read as strv; check schema type)`);
         }
-
-        console.log(`Vox: Hotkey configured - modifiers: ${this._modifierKeys.size}, trigger: ${this._triggerKey}`);
     }
 
-    _isModifierKey(keyval) {
-        return keyval === Clutter.KEY_Control_L || keyval === Clutter.KEY_Control_R ||
-               keyval === Clutter.KEY_Shift_L || keyval === Clutter.KEY_Shift_R ||
-               keyval === Clutter.KEY_Alt_L || keyval === Clutter.KEY_Alt_R ||
-               keyval === Clutter.KEY_Super_L || keyval === Clutter.KEY_Super_R;
-    }
+    _onActivated() {
+        // This gives you exactly:
+        // Ctrl+Space (press) -> activation
+        // release Space, keep holding Ctrl
+        // press Space again -> activation again
+        this._toggledOn = !this._toggledOn;
 
-    _checkHotkeyState() {
-        // Check if required modifiers are pressed
-        let modifiersPressed = true;
-        if (this._modifierKeys.size > 0) {
-            // Group modifiers by type (left/right variants)
-            const ctrlPressed = this._pressedModifiers.has(Clutter.KEY_Control_L) ||
-                               this._pressedModifiers.has(Clutter.KEY_Control_R);
-            const shiftPressed = this._pressedModifiers.has(Clutter.KEY_Shift_L) ||
-                                this._pressedModifiers.has(Clutter.KEY_Shift_R);
-            const altPressed = this._pressedModifiers.has(Clutter.KEY_Alt_L) ||
-                              this._pressedModifiers.has(Clutter.KEY_Alt_R);
-            const superPressed = this._pressedModifiers.has(Clutter.KEY_Super_L) ||
-                                this._pressedModifiers.has(Clutter.KEY_Super_R);
-
-            const needsCtrl = this._modifierKeys.has(Clutter.KEY_Control_L);
-            const needsShift = this._modifierKeys.has(Clutter.KEY_Shift_L);
-            const needsAlt = this._modifierKeys.has(Clutter.KEY_Alt_L);
-            const needsSuper = this._modifierKeys.has(Clutter.KEY_Super_L);
-
-            modifiersPressed = (!needsCtrl || ctrlPressed) &&
-                              (!needsShift || shiftPressed) &&
-                              (!needsAlt || altPressed) &&
-                              (!needsSuper || superPressed);
-        }
-
-        return modifiersPressed && this._triggerPressed;
-    }
-
-    _onKeyPress(event) {
-        const keyval = event.get_key_symbol();
-
-        if (this._isModifierKey(keyval)) {
-            this._pressedModifiers.add(keyval);
-        } else if (keyval === this._triggerKey) {
-            this._triggerPressed = true;
-        }
-
-        const hotkeyPressed = this._checkHotkeyState();
-
-        if (hotkeyPressed && !this._hotkeyActive) {
-            this._hotkeyActive = true;
+        if (this._toggledOn)
             this._onPress();
-        }
-
-        return Clutter.EVENT_PROPAGATE;
-    }
-
-    _onKeyRelease(event) {
-        const keyval = event.get_key_symbol();
-
-        if (this._isModifierKey(keyval)) {
-            this._pressedModifiers.delete(keyval);
-        } else if (keyval === this._triggerKey) {
-            this._triggerPressed = false;
-        }
-
-        const hotkeyPressed = this._checkHotkeyState();
-
-        if (!hotkeyPressed && this._hotkeyActive) {
-            this._hotkeyActive = false;
+        else
             this._onRelease();
-        }
-
-        return Clutter.EVENT_PROPAGATE;
     }
 
     disable() {
-        if (this._keyPressId) {
-            global.stage.disconnect(this._keyPressId);
-            this._keyPressId = null;
+        try {
+            Main.wm.removeKeybinding(this._bindingName);
+        } catch (_) {
+            // ignore
         }
-        if (this._keyReleaseId) {
-            global.stage.disconnect(this._keyReleaseId);
-            this._keyReleaseId = null;
-        }
+
         if (this._settingsChangedId && this._settings) {
             this._settings.disconnect(this._settingsChangedId);
             this._settingsChangedId = null;
         }
 
-        this._hotkeyActive = false;
-        this._pressedModifiers.clear();
-        this._triggerPressed = false;
+        this._toggledOn = false;
     }
 }
 
@@ -410,20 +339,12 @@ class VoxDBusService {
     constructor(indicator) {
         this._indicator = indicator;
         this._dbusId = null;
-        this._impl = null;
+        this._connection = null;
+        this._registrationId = null;
     }
 
     enable() {
         const nodeInfo = Gio.DBusNodeInfo.new_for_xml(DBUS_INTERFACE);
-
-        this._impl = {
-            SetState: (state) => {
-                this._indicator.setState(state);
-            },
-            GetState: () => {
-                return this._indicator.getState();
-            },
-        };
 
         this._dbusId = Gio.bus_own_name(
             Gio.BusType.SESSION,
@@ -435,28 +356,28 @@ class VoxDBusService {
                 this._registrationId = connection.register_object(
                     '/org/vox/Extension',
                     nodeInfo.interfaces[0],
-                    (connection, sender, path, iface, method, params, invocation) => {
+                    (conn, sender, path, iface, method, params, invocation) => {
                         if (method === 'SetState') {
                             const [state] = params.deep_unpack();
-                            this._impl.SetState(state);
+                            this._indicator.setState(state);
                             invocation.return_value(null);
                         } else if (method === 'GetState') {
-                            const state = this._impl.GetState();
+                            const state = this._indicator.getState();
                             invocation.return_value(new GLib.Variant('(s)', [state]));
                         }
                     },
                     null,
                     null
                 );
-                console.log('Vox: D-Bus service registered');
+                log('Vox: D-Bus service registered');
             },
             (connection, name) => {
                 // Name acquired
-                console.log(`Vox: D-Bus name acquired: ${name}`);
+                log(`Vox: D-Bus name acquired: ${name}`);
             },
             (connection, name) => {
                 // Name lost
-                console.warn(`Vox: D-Bus name lost: ${name}`);
+                log(`Vox: D-Bus name lost: ${name}`);
             }
         );
     }
@@ -518,18 +439,14 @@ export default class VoxExtension {
         this._dbusService = new VoxDBusService(this._indicator);
         this._dbusService.enable();
 
-        // Create hotkey handler
+        // Create hotkey handler (keybinding-based)
         this._hotkeyHandler = new VoxHotkeyHandler(
-            () => {
-                this._dbusService.emitHotkeyPressed();
-            },
-            () => {
-                this._dbusService.emitHotkeyReleased();
-            }
+            () => this._dbusService.emitHotkeyPressed(),
+            () => this._dbusService.emitHotkeyReleased()
         );
         this._hotkeyHandler.enable(this._settings);
 
-        console.log('Vox: Extension enabled');
+        log('Vox: Extension enabled');
     }
 
     disable() {
@@ -550,7 +467,7 @@ export default class VoxExtension {
 
         this._settings = null;
 
-        console.log('Vox: Extension disabled');
+        log('Vox: Extension disabled');
     }
 
     _getSettings() {
@@ -575,12 +492,14 @@ export default class VoxExtension {
 
         const schemaObj = schemaSource.lookup('org.gnome.shell.extensions.vox', true);
         if (!schemaObj) {
-            console.error('Vox: Schema not found. Please run: make install-extension');
-            // Return a fake settings object to prevent crashes
+            log('Vox: Schema not found. Please run: make install-extension');
+            // Return a fake settings object to prevent crashes.
+            // NOTE: This fake object is not sufficient for addKeybinding (expects get_strv),
+            // but it prevents hard crashes during dev.
             return {
-                get_string: () => '<Control>space',
+                get_strv: () => ['<Control>space'],
                 connect: () => 0,
-                disconnect: () => {},
+                disconnect: () => { },
             };
         }
 
