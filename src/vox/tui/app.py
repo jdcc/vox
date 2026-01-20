@@ -5,9 +5,8 @@ from typing import ClassVar
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container
 from textual.widgets import (
-    DataTable,
     Footer,
     Header,
     Label,

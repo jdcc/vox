@@ -4,7 +4,6 @@ import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import AsyncIterator
 
 import litellm
 
@@ -199,57 +198,3 @@ class AgentProcessor:
         ]
 
         return await self._get_llm_response(messages)
-
-    async def process_stream(self, text: str) -> AsyncIterator[str]:
-        """Process text with streaming LLM response.
-
-        Args:
-            text: The transcribed text
-
-        Yields:
-            Text chunks as they're generated
-        """
-        parsed = self.parse(text)
-
-        if parsed.mode == AgentMode.PASSTHROUGH:
-            yield parsed.original_text
-            return
-
-        if parsed.mode == AgentMode.GENERATE:
-            messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a helpful assistant. Generate text based on the user's request. "
-                        "Output only the requested content, nothing else."
-                    ),
-                },
-                {"role": "user", "content": parsed.instruction},
-            ]
-        else:
-            messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a helpful assistant that transforms text based on instructions. "
-                        "Output only the transformed text, nothing else."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": f"Transform this text: \"{parsed.context}\"\n\nInstruction: {parsed.instruction}",
-                },
-            ]
-
-        model_name = f"{self.provider}/{self.model}"
-
-        response = await litellm.acompletion(
-            model=model_name,
-            messages=messages,
-            max_tokens=2000,
-            stream=True,
-        )
-
-        async for chunk in response:
-            if chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
