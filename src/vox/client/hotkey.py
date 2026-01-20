@@ -1,92 +1,22 @@
-"""Global hotkey handling using evdev for Wayland."""
+"""Global hotkey handling via GNOME Shell extension D-Bus signals."""
 
 import asyncio
 import logging
-import os
-from pathlib import Path
 from typing import Callable
 
-import evdev
-from evdev import InputDevice, categorize, ecodes
+from dasbus.connection import SessionMessageBus
+from dasbus.error import DBusError
+from dasbus.loop import EventLoop
 
 logger = logging.getLogger(__name__)
 
-KEY_MAPPING = {
-    "ctrl": {ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL},
-    "alt": {ecodes.KEY_LEFTALT, ecodes.KEY_RIGHTALT},
-    "shift": {ecodes.KEY_LEFTSHIFT, ecodes.KEY_RIGHTSHIFT},
-    "super": {ecodes.KEY_LEFTMETA, ecodes.KEY_RIGHTMETA},
-    "meta": {ecodes.KEY_LEFTMETA, ecodes.KEY_RIGHTMETA},
-    "space": {ecodes.KEY_SPACE},
-    "enter": {ecodes.KEY_ENTER},
-    "tab": {ecodes.KEY_TAB},
-    "escape": {ecodes.KEY_ESC},
-    "esc": {ecodes.KEY_ESC},
-}
-
-for c in "abcdefghijklmnopqrstuvwxyz":
-    key_code = getattr(ecodes, f"KEY_{c.upper()}")
-    KEY_MAPPING[c] = {key_code}
-
-for i in range(10):
-    KEY_MAPPING[str(i)] = {getattr(ecodes, f"KEY_{i}")}
-
-for i in range(1, 13):
-    KEY_MAPPING[f"f{i}"] = {getattr(ecodes, f"KEY_F{i}")}
-
-
-def parse_hotkey(hotkey_str: str) -> tuple[set[int], set[int]]:
-    """Parse a hotkey string into modifier and key sets.
-
-    Args:
-        hotkey_str: Hotkey string like "ctrl+space" or "ctrl+shift+a"
-
-    Returns:
-        Tuple of (modifier_keys, trigger_keys)
-    """
-    parts = hotkey_str.lower().split("+")
-    modifiers = set()
-    triggers = set()
-
-    modifier_names = {"ctrl", "alt", "shift", "super", "meta"}
-
-    for part in parts:
-        part = part.strip()
-        if part in modifier_names:
-            modifiers.update(KEY_MAPPING.get(part, set()))
-        else:
-            triggers.update(KEY_MAPPING.get(part, set()))
-
-    return modifiers, triggers
-
-
-def find_keyboard_devices() -> list[InputDevice]:
-    """Find all keyboard input devices.
-
-    Returns:
-        List of keyboard InputDevice objects
-    """
-    devices = []
-    input_dir = Path("/dev/input")
-
-    for event_path in input_dir.glob("event*"):
-        try:
-            device = InputDevice(str(event_path))
-            capabilities = device.capabilities()
-
-            if ecodes.EV_KEY in capabilities:
-                keys = capabilities[ecodes.EV_KEY]
-                if ecodes.KEY_A in keys and ecodes.KEY_SPACE in keys:
-                    devices.append(device)
-                    logger.debug(f"Found keyboard: {device.name}")
-        except (PermissionError, OSError) as e:
-            logger.debug(f"Cannot access {event_path}: {e}")
-
-    return devices
+DBUS_NAME = "org.vox.Extension"
+DBUS_PATH = "/org/vox/Extension"
+DBUS_INTERFACE = "org.vox.Extension"
 
 
 class HotkeyListener:
-    """Listens for global hotkeys using evdev."""
+    """Listens for global hotkeys via GNOME Shell extension D-Bus signals."""
 
     def __init__(
         self,
@@ -97,136 +27,138 @@ class HotkeyListener:
         """Initialize the hotkey listener.
 
         Args:
-            hotkey: Hotkey string (e.g., "ctrl+space")
+            hotkey: Hotkey string (e.g., "ctrl+space") - configured in extension settings
             on_press: Callback when hotkey is pressed
             on_release: Callback when hotkey is released
         """
-        self.modifiers, self.triggers = parse_hotkey(hotkey)
+        self._hotkey = hotkey
         self.on_press = on_press
         self.on_release = on_release
-
-        self._devices: list[InputDevice] = []
-        self._pressed_keys: set[int] = set()
-        self._hotkey_active = False
         self._running = False
-        self._tasks: list[asyncio.Task] = []
-
-    def _check_hotkey_state(self) -> bool:
-        """Check if the hotkey combination is currently pressed.
-
-        Returns:
-            True if hotkey is active
-        """
-        modifiers_pressed = all(
-            any(mod in self._pressed_keys for mod in KEY_MAPPING.get(name, set()))
-            for name, codes in KEY_MAPPING.items()
-            if codes & self.modifiers
-        )
-
-        has_modifiers = bool(self.modifiers)
-        if has_modifiers:
-            modifiers_pressed = any(
-                key in self._pressed_keys for key in self.modifiers
-            )
-
-        triggers_pressed = any(key in self._pressed_keys for key in self.triggers)
-
-        return modifiers_pressed and triggers_pressed
-
-    async def _handle_device(self, device: InputDevice) -> None:
-        """Handle events from a single device.
-
-        Args:
-            device: The input device to read from
-        """
-        try:
-            async for event in device.async_read_loop():
-                if not self._running:
-                    break
-
-                if event.type != ecodes.EV_KEY:
-                    continue
-
-                key_event = categorize(event)
-
-                if key_event.keystate == key_event.key_down:
-                    self._pressed_keys.add(event.code)
-                elif key_event.keystate == key_event.key_up:
-                    self._pressed_keys.discard(event.code)
-
-                hotkey_pressed = self._check_hotkey_state()
-
-                if hotkey_pressed and not self._hotkey_active:
-                    self._hotkey_active = True
-                    logger.debug("Hotkey pressed")
-                    self.on_press()
-                elif not hotkey_pressed and self._hotkey_active:
-                    self._hotkey_active = False
-                    logger.debug("Hotkey released")
-                    self.on_release()
-
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error(f"Error reading device {device.name}: {e}")
+        self._proxy = None
+        self._bus = None
+        self._event_loop = None
+        self._loop_task = None
+        self._press_subscription = None
+        self._release_subscription = None
 
     async def start(self) -> None:
-        """Start listening for hotkeys."""
-        self._devices = find_keyboard_devices()
-
-        if not self._devices:
+        """Start listening for hotkey signals from the GNOME extension."""
+        try:
+            self._bus = SessionMessageBus()
+            self._proxy = self._bus.get_proxy(DBUS_NAME, DBUS_PATH)
+        except DBusError as e:
             raise RuntimeError(
-                "No keyboard devices found. Make sure you're in the 'input' group: "
-                "sudo usermod -aG input $USER (then log out and back in)"
-            )
+                f"Failed to connect to Vox GNOME Shell extension: {e}\n"
+                "Make sure the extension is installed and enabled:\n"
+                "  make install-extension\n"
+                "  gnome-extensions enable vox@local\n"
+                "Then restart GNOME Shell (log out/in on Wayland)"
+            ) from e
 
-        logger.info(f"Listening on {len(self._devices)} keyboard device(s)")
+        # Subscribe to D-Bus signals
+        connection = self._bus.connection
+
+        self._press_subscription = connection.signal_subscribe(
+            DBUS_NAME,
+            DBUS_INTERFACE,
+            "HotkeyPressed",
+            DBUS_PATH,
+            None,
+            0,
+            self._on_hotkey_pressed_signal,
+        )
+
+        self._release_subscription = connection.signal_subscribe(
+            DBUS_NAME,
+            DBUS_INTERFACE,
+            "HotkeyReleased",
+            DBUS_PATH,
+            None,
+            0,
+            self._on_hotkey_released_signal,
+        )
+
         self._running = True
 
-        for device in self._devices:
-            task = asyncio.create_task(self._handle_device(device))
-            self._tasks.append(task)
+        # Run the GLib event loop in a thread to process D-Bus signals
+        self._event_loop = EventLoop()
+        self._loop_task = asyncio.create_task(self._run_event_loop())
+
+        logger.info(f"Listening for hotkey signals from GNOME extension (configured: {self._hotkey})")
+
+    async def _run_event_loop(self) -> None:
+        """Run the GLib event loop to process D-Bus signals."""
+        import gi
+        gi.require_version('GLib', '2.0')
+        from gi.repository import GLib
+
+        loop = GLib.MainLoop()
+        context = loop.get_context()
+
+        while self._running:
+            # Process pending events without blocking
+            while context.pending():
+                context.iteration(False)
+            # Yield to asyncio
+            await asyncio.sleep(0.01)
+
+    def _on_hotkey_pressed_signal(self, connection, sender, path, interface, signal, params):
+        """Handle HotkeyPressed signal from D-Bus."""
+        logger.debug("Hotkey pressed (D-Bus signal)")
+        try:
+            self.on_press()
+        except Exception as e:
+            logger.error(f"Error in hotkey press handler: {e}")
+
+    def _on_hotkey_released_signal(self, connection, sender, path, interface, signal, params):
+        """Handle HotkeyReleased signal from D-Bus."""
+        logger.debug("Hotkey released (D-Bus signal)")
+        try:
+            self.on_release()
+        except Exception as e:
+            logger.error(f"Error in hotkey release handler: {e}")
 
     async def stop(self) -> None:
-        """Stop listening for hotkeys."""
+        """Stop listening for hotkey signals."""
         self._running = False
 
-        for task in self._tasks:
-            task.cancel()
-
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
-
-        self._tasks.clear()
-
-        for device in self._devices:
+        if self._loop_task:
+            self._loop_task.cancel()
             try:
-                device.close()
-            except Exception:
+                await self._loop_task
+            except asyncio.CancelledError:
                 pass
+            self._loop_task = None
 
-        self._devices.clear()
+        if self._bus and self._bus.connection:
+            connection = self._bus.connection
+            if self._press_subscription is not None:
+                connection.signal_unsubscribe(self._press_subscription)
+                self._press_subscription = None
+            if self._release_subscription is not None:
+                connection.signal_unsubscribe(self._release_subscription)
+                self._release_subscription = None
+
+        self._proxy = None
+        self._bus = None
         logger.info("Hotkey listener stopped")
 
 
-def check_input_permissions() -> bool:
-    """Check if the current user has permission to read input devices.
+def check_extension_available() -> bool:
+    """Check if the Vox GNOME Shell extension is available and running.
 
     Returns:
-        True if permissions are sufficient
+        True if extension is available
     """
-    import grp
-    import pwd
-
     try:
-        user = pwd.getpwuid(os.getuid())
-        groups = [g.gr_name for g in grp.getgrall() if user.pw_name in g.gr_mem]
-
-        gid = os.getgid()
-        primary_group = grp.getgrgid(gid).gr_name
-        groups.append(primary_group)
-
-        return "input" in groups
+        bus = SessionMessageBus()
+        proxy = bus.get_proxy(DBUS_NAME, DBUS_PATH)
+        # Try to call GetState to verify the extension is responsive
+        proxy.GetState()
+        return True
+    except DBusError:
+        return False
     except Exception as e:
-        logger.error(f"Error checking permissions: {e}")
+        logger.debug(f"Error checking extension: {e}")
         return False

@@ -7,7 +7,7 @@ import signal
 from vox.config import Config, load_config
 from vox.client.audio import AudioRecorder
 from vox.client.connection import ConnectionState, ServerConnection, TranscriptionResponse
-from vox.client.hotkey import HotkeyListener, check_input_permissions
+from vox.client.hotkey import HotkeyListener, check_extension_available
 from vox.client.output import OutputHandler, check_wayland_tools
 from vox.client.overlay import Overlay
 
@@ -112,10 +112,13 @@ class Client:
         """Start the client."""
         self._loop = asyncio.get_event_loop()
 
-        if not check_input_permissions():
+        # Check if GNOME extension is available
+        if not check_extension_available():
             logger.warning(
-                "Not in 'input' group. Hotkeys may not work. "
-                "Run: sudo usermod -aG input $USER (then log out/in)"
+                "Vox GNOME Shell extension not available. "
+                "Install with: make install-extension\n"
+                "Then enable: gnome-extensions enable vox@local\n"
+                "And restart GNOME Shell (log out/in on Wayland)"
             )
 
         tools = check_wayland_tools()

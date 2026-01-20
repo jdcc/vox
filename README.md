@@ -5,34 +5,24 @@ Lightweight speech-to-text with LLM agent integration.
 ## Features
 
 - **Fast transcription** using faster-whisper (CTranslate2-optimized)
-- **Hold-to-record** with global hotkeys via evdev
+- **Hold-to-record** with global hotkeys via GNOME Shell extension
 - **LLM agent integration** for text transformation and generation
 - **Client-server architecture** for remote GPU support
-- **System tray icon** with visual state indicators
+- **Visual indicator** overlay for recording/processing states
 - **TUI** for model management and settings
 
 ## Quick Start
 
 ```bash
-# Install dependencies
-make install
-make install-deps
+# Full setup (installs deps, extension, config, and model)
+make setup
 
-# Add yourself to input group (for hotkeys)
-make add-input-group
-# Log out and back in
+# Enable the GNOME extension
+gnome-extensions enable vox@local
+# Log out and back in (required on Wayland)
 
-# Create config
-make config-init
-
-# Download a model
-make models-download
-
-# Start server
-make server
-
-# In another terminal, start client
-make client
+# Start vox
+make start
 ```
 
 ## Usage
@@ -79,10 +69,31 @@ agent:
 
 ## System Requirements
 
-- Ubuntu + Wayland
+- **GNOME Shell** on Wayland (extension required for hotkeys)
 - Python 3.11+
-- System packages: `wl-clipboard`, `wtype`, `libportaudio2`
-- User must be in `input` group for hotkeys
+- System packages: `wl-clipboard`, `ydotool`, `libportaudio2`
+
+## GNOME Extension
+
+The Vox GNOME Shell extension provides:
+- Global hotkey detection with press-and-hold semantics
+- Visual indicator overlay (recording/processing/success/failure)
+- D-Bus communication with the Python client
+
+```bash
+# Install extension
+make install-extension
+
+# Enable extension
+gnome-extensions enable vox@local
+
+# Restart GNOME Shell (log out/in on Wayland)
+
+# Uninstall extension
+make uninstall-extension
+```
+
+**Note:** This approach is GNOME-specific and won't work on other desktop environments (KDE, Sway, etc.).
 
 ## Docker (Server)
 

@@ -1,0 +1,32 @@
+/* Vox Extension Stylesheet */
+
+.vox-indicator {
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  margin: 8px;
+}
+
+.vox-indicator-recording {
+  background-color: #F54236;
+  box-shadow: 0 0 8px rgba(245, 66, 54, 0.8);
+}
+
+.vox-indicator-processing {
+  background-color: #FFC107;
+  box-shadow: 0 0 8px rgba(255, 193, 7, 0.8);
+}
+
+.vox-indicator-success {
+  background-color: #4CAF50;
+  box-shadow: 0 0 8px rgba(76, 175, 80, 0.8);
+}
+
+.vox-indicator-failure {
+  background-color: #F54236;
+  box-shadow: 0 0 8px rgba(245, 66, 54, 0.8);
+}
+
+.vox-indicator-hidden {
+  opacity: 0;
+}

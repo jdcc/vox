@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.vox" path="/org/gnome/shell/extensions/vox/">
+    <key name="hotkey" type="s">
+      <default>'&lt;Control&gt;space'</default>
+      <summary>Hotkey for push-to-talk</summary>
+      <description>The keyboard shortcut to hold for recording. Use GTK accelerator format.</description>
+    </key>
+    <key name="indicator-position" type="s">
+      <default>'top-right'</default>
+      <summary>Indicator position</summary>
+      <description>Position of the visual indicator on screen (top-right, top-center, bottom-right).</description>
+    </key>
+  </schema>
+</schemalist>

@@ -1,10 +1,11 @@
-"""Overlay indicator control via vox-overlay binary."""
+"""Overlay indicator control via GNOME Shell extension D-Bus interface."""
 
 import logging
-import subprocess
-import shutil
 from enum import Enum
 from typing import Literal
+
+from dasbus.connection import SessionMessageBus
+from dasbus.error import DBusError
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +13,7 @@ logger = logging.getLogger(__name__)
 class OverlayState(Enum):
     """Overlay indicator states."""
 
-    HIDDEN = "hide"
+    HIDDEN = "hidden"
     RECORDING = "recording"
     PROCESSING = "processing"
     SUCCESS = "success"
@@ -21,71 +22,80 @@ class OverlayState(Enum):
 
 OverlayPosition = Literal["top-right", "top-center", "bottom-right"]
 
+DBUS_NAME = "org.vox.Extension"
+DBUS_PATH = "/org/vox/Extension"
+
 
 class Overlay:
-    """Controls the vox-overlay indicator binary."""
-
-    BINARY_NAME = "vox-overlay"
+    """Controls the overlay indicator via GNOME Shell extension D-Bus interface."""
 
     def __init__(self, position: OverlayPosition = "top-right", enabled: bool = True) -> None:
         """Initialize the overlay controller.
 
         Args:
-            position: Screen position for the overlay
+            position: Screen position for the overlay (configured in extension settings)
             enabled: Whether overlay is enabled
         """
         self._position = position
         self._enabled = enabled
-        self._process: subprocess.Popen | None = None
-        self._available = self._check_binary()
+        self._proxy = None
+        self._available = False
 
-    def _check_binary(self) -> bool:
-        """Check if the overlay binary is available."""
-        return shutil.which(self.BINARY_NAME) is not None
+    def _get_proxy(self):
+        """Get or create the D-Bus proxy."""
+        if self._proxy is not None:
+            return self._proxy
+
+        try:
+            bus = SessionMessageBus()
+            self._proxy = bus.get_proxy(DBUS_NAME, DBUS_PATH)
+            self._available = True
+            return self._proxy
+        except DBusError as e:
+            logger.debug(f"Failed to connect to D-Bus service: {e}")
+            self._available = False
+            return None
 
     @property
     def available(self) -> bool:
         """Check if overlay is available and enabled."""
-        return self._enabled and self._available
+        if not self._enabled:
+            return False
+        if self._available:
+            return True
+        # Try to connect
+        self._get_proxy()
+        return self._available
 
     def start(self) -> None:
-        """Start the overlay process."""
-        if not self.available:
-            if self._enabled and not self._available:
-                logger.debug(
-                    f"{self.BINARY_NAME} not found in PATH. "
-                    "Run 'make build-overlay install-overlay' to install."
-                )
+        """Initialize connection to the extension.
+
+        The GNOME Shell extension runs independently, so we just verify connectivity.
+        """
+        if not self._enabled:
             return
 
-        if self._process is not None:
-            return
-
-        try:
-            self._process = subprocess.Popen(
-                [self.BINARY_NAME, "--position", self._position],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+        proxy = self._get_proxy()
+        if proxy is None:
+            logger.debug(
+                "Vox GNOME Shell extension not available. "
+                "Run 'make install-extension' and enable with "
+                "'gnome-extensions enable vox@local'"
             )
-            logger.debug(f"Started overlay process (pid={self._process.pid})")
-        except Exception as e:
-            logger.warning(f"Failed to start overlay: {e}")
-            self._available = False
+            return
+
+        logger.debug("Connected to Vox GNOME Shell extension")
 
     def stop(self) -> None:
-        """Stop the overlay process."""
-        if self._process is not None:
+        """Cleanup D-Bus connection."""
+        # Hide indicator before disconnecting
+        if self._proxy is not None:
             try:
-                self._process.terminate()
-                self._process.wait(timeout=1)
+                self._proxy.SetState("hidden")
             except Exception:
-                try:
-                    self._process.kill()
-                except Exception:
-                    pass
-            self._process = None
-            logger.debug("Stopped overlay process")
+                pass
+        self._proxy = None
+        logger.debug("Disconnected from overlay extension")
 
     def set_state(self, state: OverlayState) -> None:
         """Set the overlay state.
@@ -93,24 +103,20 @@ class Overlay:
         Args:
             state: New overlay state
         """
-        if not self.available or self._process is None:
+        if not self._enabled:
             return
 
-        if self._process.poll() is not None:
-            # Process has exited, try to restart
-            self._process = None
-            self.start()
-            if self._process is None:
-                return
+        proxy = self._get_proxy()
+        if proxy is None:
+            return
 
         try:
-            command = f"{state.value}\n"
-            self._process.stdin.write(command.encode())
-            self._process.stdin.flush()
+            proxy.SetState(state.value)
             logger.debug(f"Overlay state: {state.value}")
-        except Exception as e:
-            logger.debug(f"Failed to send overlay command: {e}")
+        except DBusError as e:
+            logger.debug(f"Failed to set overlay state: {e}")
             self._available = False
+            self._proxy = None
 
     def recording(self) -> None:
         """Show recording indicator."""

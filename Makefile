@@ -1,37 +1,27 @@
-.PHONY: build run stop logs client server tui check install clean setup setup-full start start-bg build-overlay install-overlay
+.PHONY: build run stop logs client server tui check install clean setup setup-full start start-bg install-extension uninstall-extension
 
 # =============================================================================
 # Quick Start (from clean machine)
 # =============================================================================
 
-# Full setup: system deps + python deps + config + model download
-# Note: Does NOT add to input group (requires logout). Run 'make setup-full' for that.
-setup: install-deps install install-overlay config-init models-download
+# Full setup: system deps + python deps + config + model download + extension
+setup: install-deps install install-extension config-init models-download
 	@echo ""
 	@echo "=========================================="
 	@echo "Setup complete!"
 	@echo "=========================================="
 	@echo ""
 	@echo "Next steps:"
-	@echo "  1. Add yourself to input group (for hotkeys):"
-	@echo "     make add-input-group"
-	@echo "     Then log out and back in"
+	@echo "  1. Enable the GNOME extension:"
+	@echo "     gnome-extensions enable vox@local"
+	@echo "     Then log out and back in (required on Wayland)"
 	@echo ""
 	@echo "  2. Start vox:"
 	@echo "     make start"
 	@echo ""
 
-# Full setup including input group (will require logout/login after)
-setup-full: install-deps install install-overlay config-init models-download add-input-group
-	@echo ""
-	@echo "=========================================="
-	@echo "Setup complete!"
-	@echo "=========================================="
-	@echo ""
-	@echo "IMPORTANT: Log out and back in for input group to take effect"
-	@echo ""
-	@echo "Then run: make start"
-	@echo ""
+# Full setup (same as setup, extension replaces input group requirement)
+setup-full: setup
 
 # Start both server and client (server in background)
 start:
@@ -93,26 +83,42 @@ install:
 	uv sync
 
 install-deps:
-	sudo apt install -y wl-clipboard ydotool libportaudio2 libgtk-4-dev libgtk4-layer-shell-dev
+	sudo apt install -y wl-clipboard ydotool libportaudio2
 	@echo ""
 	@echo "Setting up uinput permissions for ydotool..."
 	@echo 'KERNEL=="uinput", GROUP="input", MODE="0660"' | sudo tee /etc/udev/rules.d/80-uinput.rules > /dev/null
 	sudo udevadm control --reload-rules
 	sudo udevadm trigger
 	@echo ""
-	@if ! command -v cargo >/dev/null 2>&1; then \
-		echo "Installing Rust via rustup..."; \
-		curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; \
-		echo "Rust installed. Run 'source ~/.cargo/env' or restart your shell."; \
-	else \
-		echo "Rust already installed."; \
-	fi
-	@echo ""
 	@echo "Done! You may need to log out/in for uinput group access."
 
-add-input-group:
-	sudo usermod -aG input $$USER
-	@echo "Please log out and back in for group changes to take effect"
+# GNOME Extension commands
+install-extension:
+	@echo "Installing Vox GNOME Shell extension..."
+	@mkdir -p ~/.local/share/gnome-shell/extensions/vox@local/schemas
+	@cp extension/metadata.json ~/.local/share/gnome-shell/extensions/vox@local/
+	@cp extension/extension.js ~/.local/share/gnome-shell/extensions/vox@local/
+	@cp extension/stylesheet.css ~/.local/share/gnome-shell/extensions/vox@local/
+	@cp extension/schemas/*.xml ~/.local/share/gnome-shell/extensions/vox@local/schemas/
+	@echo "Compiling GSettings schemas..."
+	@glib-compile-schemas ~/.local/share/gnome-shell/extensions/vox@local/schemas/
+	@echo ""
+	@echo "Extension installed to ~/.local/share/gnome-shell/extensions/vox@local/"
+	@echo ""
+	@echo "Next steps:"
+	@echo "  1. Enable the extension:"
+	@echo "     gnome-extensions enable vox@local"
+	@echo ""
+	@echo "  2. Restart GNOME Shell:"
+	@echo "     - On Wayland: Log out and back in"
+	@echo "     - On X11: Press Alt+F2, type 'r', press Enter"
+	@echo ""
+
+uninstall-extension:
+	@echo "Uninstalling Vox GNOME Shell extension..."
+	@gnome-extensions disable vox@local 2>/dev/null || true
+	@rm -rf ~/.local/share/gnome-shell/extensions/vox@local
+	@echo "Extension uninstalled."
 
 # Model commands
 models-list:
@@ -128,16 +134,6 @@ config-init:
 config-show:
 	uv run vox config show
 
-# Overlay commands
-build-overlay:
-	cd overlay && cargo build --release
-
-install-overlay: build-overlay
-	mkdir -p ~/.local/bin
-	cp overlay/target/release/vox-overlay ~/.local/bin/
-	@echo "Installed vox-overlay to ~/.local/bin/"
-	@echo "Make sure ~/.local/bin is in your PATH"
-
 # Clean commands
 clean:
 	rm -rf .venv __pycache__ src/vox/__pycache__ src/vox/**/__pycache__
@@ -151,12 +147,12 @@ help:
 	@echo ""
 	@echo "QUICK START (clean machine):"
 	@echo "  make setup      - Install everything, download model"
-	@echo "  make add-input-group  (then log out/in)"
+	@echo "  gnome-extensions enable vox@local"
+	@echo "  (log out/in on Wayland)"
 	@echo "  make start      - Run server + client"
 	@echo ""
 	@echo "Quick start commands:"
-	@echo "  make setup      - Full setup (deps + config + model)"
-	@echo "  make setup-full - Setup + add to input group"
+	@echo "  make setup      - Full setup (deps + config + model + extension)"
 	@echo "  make start      - Start server (bg) + client (fg)"
 	@echo "  make start-bg   - Start server in background only"
 	@echo "  make stop-local - Stop background server"
@@ -177,13 +173,12 @@ help:
 	@echo "Setup (individual steps):"
 	@echo "  make install    - Install Python dependencies"
 	@echo "  make install-deps - Install system dependencies (apt)"
-	@echo "  make add-input-group - Add user to input group"
 	@echo "  make config-init - Create default config file"
 	@echo ""
 	@echo "Models:"
 	@echo "  make models-list     - List available models"
 	@echo "  make models-download - Download default model (small.en)"
 	@echo ""
-	@echo "Overlay (visual indicator):"
-	@echo "  make build-overlay   - Build the Rust overlay binary"
-	@echo "  make install-overlay - Build and install to ~/.local/bin"
+	@echo "GNOME Extension:"
+	@echo "  make install-extension   - Install the GNOME Shell extension"
+	@echo "  make uninstall-extension - Remove the GNOME Shell extension"
