@@ -29,37 +29,47 @@ const DBUS_INTERFACE = `
 </node>
 `;
 
-// State colors matching the original overlay
+// State colors (0.0-1.0 range for Cairo)
 const STATE_COLORS = {
-    recording: { r: 245, g: 66, b: 54 },    // #F54236
-    processing: { r: 255, g: 193, b: 7 },   // #FFC107
-    success: { r: 76, g: 175, b: 80 },      // #4CAF50
-    failure: { r: 245, g: 66, b: 54 },      // #F54236
+    recording:  { r: 1.0,   g: 0.392, b: 0.392 },  // rgba(255,100,100)
+    processing: { r: 0.392, g: 0.627, b: 1.0   },  // rgba(100,160,255)
+    success:    { r: 0.196, g: 0.784, b: 0.471 },  // rgba(50,200,120)
+    failure:    { r: 1.0,   g: 0.392, b: 0.392 },  // rgba(255,100,100)
 };
 
 class VoxIndicator {
     constructor() {
         this._widget = null;
         this._state = 'hidden';
+        this._prevState = null;
         this._animationTimeout = null;
-        this._pulseDirection = 1;
-        this._pulseValue = 1.0;
-        this._rotationAngle = 0;
-        this._flashCount = 0;
         this._monitorsChangedId = null;
+
+        // Animation timing
+        this._time = 0;
+        this._transitionProgress = 1;
+        this._transitionDuration = 0.5;
+
+        // Animation parameters (from HTML reference)
+        this._animationSpeed = 0.8;
+        this._opacityMultiplier = 1.1;
+        this._lineThickness = 1.9;
+        this._ringCount = 5;
+        this._ringSpacing = 0.6;
+        this._centerSize = 7;
+
+        // Scale factor (100px widget / 300px source)
+        this._scale = 1.5;
     }
 
     create() {
-        this._widget = new St.Widget({
-            style_class: 'vox-indicator vox-indicator-hidden',
-            width: 24,
-            height: 24,
-            opacity: 0,
+        this._widget = new St.DrawingArea({
+            width: 210,
+            height: 210,
             reactive: false,
         });
 
-        // Make rotation behave as expected (center pivot)
-        this._widget.set_pivot_point(0.5, 0.5);
+        this._widget.connect('repaint', this._onRepaint.bind(this));
 
         // Position in top-right corner
         this._updatePosition();
@@ -90,145 +100,270 @@ class VoxIndicator {
         );
     }
 
+    // Easing functions
+    _inOutQuadEasing(t) {
+        return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+    }
+
+    _outBackEasing(t) {
+        const c1 = 1.70158;
+        const c3 = c1 + 1;
+        return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+    }
+
     setState(state) {
         if (this._state === state) return;
 
-        this._stopAnimation();
-        this._state = state;
+        // Handle 'hide' as alias for 'hidden'
+        if (state === 'hide') state = 'hidden';
 
-        if (state === 'hidden' || state === 'hide') {
-            this._hide();
-            return;
-        }
-
-        const color = STATE_COLORS[state];
-        if (!color) {
+        // Validate state
+        if (state !== 'hidden' && !STATE_COLORS[state]) {
             log(`Vox: Unknown state "${state}"`);
             return;
         }
 
-        this._widget.style = `
-            background-color: rgb(${color.r}, ${color.g}, ${color.b});
-            box-shadow: 0 0 8px rgba(${color.r}, ${color.g}, ${color.b}, 0.8);
-            border-radius: 50%;
-        `;
-        this._widget.remove_style_class_name('vox-indicator-hidden');
+        // Store previous state for crossfade
+        this._prevState = this._state;
+        this._state = state;
+        this._transitionProgress = 0;
 
-        // Fade in
-        this._widget.ease({
-            opacity: 255,
-            duration: 150,
-            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-        });
-
-        // Start state-specific animation
-        if (state === 'recording') {
-            this._startPulseAnimation();
-        } else if (state === 'processing') {
-            this._startSpinAnimation();
-        } else if (state === 'success' || state === 'failure') {
-            this._startFlashAnimation();
-        }
+        // Start animation loop
+        this._startAnimationLoop();
     }
 
-    _hide() {
-        if (!this._widget) return;
+    _startAnimationLoop() {
+        if (this._animationTimeout) return;
 
-        this._widget.ease({
-            opacity: 0,
-            duration: 150,
-            mode: Clutter.AnimationMode.EASE_IN_QUAD,
-            onComplete: () => {
-                if (this._widget)
-                    this._widget.add_style_class_name('vox-indicator-hidden');
-            },
-        });
-    }
-
-    _startPulseAnimation() {
-        this._pulseValue = 1.0;
-        this._pulseDirection = -1;
-
-        const animate = () => {
-            if (this._state !== 'recording' || !this._widget) return false;
-
-            this._pulseValue += this._pulseDirection * 0.05;
-            if (this._pulseValue <= 0.5) {
-                this._pulseDirection = 1;
-                this._pulseValue = 0.5;
-            } else if (this._pulseValue >= 1.0) {
-                this._pulseDirection = -1;
-                this._pulseValue = 1.0;
-            }
-
-            const scale = 0.8 + (this._pulseValue * 0.4);
-            this._widget.set_scale(scale, scale);
-
-            return true;
-        };
-
-        this._animationTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, animate);
-    }
-
-    _startSpinAnimation() {
-        this._rotationAngle = 0;
-
-        const animate = () => {
-            if (this._state !== 'processing' || !this._widget) return false;
-
-            this._rotationAngle = (this._rotationAngle + 10) % 360;
-
-            // Actually apply rotation (your earlier code advanced angle but never used it)
-            this._widget.rotation_angle_z = this._rotationAngle;
-
-            // Pulsing scale for processing
-            const pulse = Math.sin(this._rotationAngle * Math.PI / 180) * 0.1 + 1.0;
-            this._widget.set_scale(pulse, pulse);
-
-            return true;
-        };
-
-        this._animationTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, animate);
-    }
-
-    _startFlashAnimation() {
-        this._flashCount = 0;
-        const maxFlashes = 3;
+        const frameInterval = 16;  // ~60fps
+        const timeIncrement = 0.015;
+        const transitionIncrement = 0.016;
 
         const animate = () => {
             if (!this._widget) return false;
 
-            this._flashCount++;
+            // Update time
+            this._time += timeIncrement;
 
-            if (this._flashCount >= maxFlashes * 2) {
-                // Done flashing, hide
-                this._hide();
-                this._state = 'hidden';
-                return false;
+            // Update transition progress
+            if (this._transitionProgress < 1) {
+                const activeDuration = this._state === 'hidden' ? 0.2 : this._transitionDuration;
+                this._transitionProgress += transitionIncrement / activeDuration;
+                this._transitionProgress = Math.min(this._transitionProgress, 1);
             }
 
-            const visible = this._flashCount % 2 === 1;
-            this._widget.opacity = visible ? 255 : 0;
+            // Request repaint
+            this._widget.queue_repaint();
+
+            // Stop animation loop if hidden and transition complete
+            if (this._state === 'hidden' && this._transitionProgress >= 1) {
+                this._animationTimeout = null;
+                return false;
+            }
 
             return true;
         };
 
-        this._animationTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, animate);
+        this._animationTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, frameInterval, animate);
     }
 
-    _stopAnimation() {
+    _stopAnimationLoop() {
         if (this._animationTimeout) {
             GLib.source_remove(this._animationTimeout);
             this._animationTimeout = null;
         }
-        if (this._widget) {
-            this._widget.set_scale(1, 1);
-            this._widget.rotation_angle_z = 0;
+    }
+
+    _onRepaint(area) {
+        const cr = area.get_context();
+        const [width, height] = area.get_surface_size();
+        const cx = width / 2;
+        const cy = height / 2;
+
+        // Clear canvas
+        cr.setOperator(0);  // CAIRO_OPERATOR_CLEAR
+        cr.paint();
+        cr.setOperator(2);  // CAIRO_OPERATOR_OVER
+
+        // Calculate transition alpha
+        const fadeProgress = this._inOutQuadEasing(this._transitionProgress);
+
+        // Draw previous state fading out
+        if (this._prevState && this._transitionProgress < 1) {
+            const prevAlpha = 1 - fadeProgress;
+            this._drawState(cr, this._prevState, cx, cy, prevAlpha);
+        }
+
+        // Draw current state fading in
+        const currentAlpha = this._transitionProgress < 1 ? fadeProgress : 1;
+        this._drawState(cr, this._state, cx, cy, currentAlpha);
+
+        cr.$dispose();
+    }
+
+    _drawState(cr, state, cx, cy, alpha) {
+        switch (state) {
+            case 'recording':
+                this._drawRecording(cr, cx, cy, alpha);
+                break;
+            case 'processing':
+                this._drawProcessing(cr, cx, cy, alpha);
+                break;
+            case 'success':
+                this._drawSuccess(cr, cx, cy, alpha);
+                break;
+            case 'failure':
+                this._drawFailure(cr, cx, cy, alpha);
+                break;
+            case 'hidden':
+                // Nothing to draw
+                break;
+        }
+    }
+
+    _drawRecording(cr, cx, cy, alpha) {
+        const color = STATE_COLORS.recording;
+
+        // 5 converging wave rings moving inward
+        for (let i = 0; i < this._ringCount; i++) {
+            const t = (this._time * this._animationSpeed * 5 + i * this._ringSpacing) % (Math.PI * 2);
+            const radius = (50 - t * 7.96) * this._scale;
+            const opacity = (t / (Math.PI * 2)) * 0.4 * this._opacityMultiplier * alpha;
+
+            if (radius > 0) {
+                cr.setSourceRGBA(color.r, color.g, color.b, opacity);
+                cr.arc(cx, cy, radius, 0, Math.PI * 2);
+                cr.setLineWidth(this._lineThickness * this._scale);
+                cr.stroke();
+            }
+        }
+
+        // Pulsing center dot
+        const pulse = (Math.sin(this._time * 3 * this._animationSpeed * 2.5) + 1) / 2;
+        const centerRadius = (this._centerSize + pulse * 2) * this._scale;
+        const centerOpacity = (0.7 + pulse * 0.3) * this._opacityMultiplier * alpha;
+
+        cr.setSourceRGBA(color.r, color.g, color.b, centerOpacity);
+        cr.arc(cx, cy, centerRadius, 0, Math.PI * 2);
+        cr.fill();
+    }
+
+    _drawProcessing(cr, cx, cy, alpha) {
+        const color = STATE_COLORS.processing;
+
+        // 5 radiating wave rings expanding outward
+        for (let i = 0; i < this._ringCount; i++) {
+            const t = (this._time * this._animationSpeed * 5 + i * this._ringSpacing) % (Math.PI * 2);
+            const radius = (10 + t * 6.4) * this._scale;
+            const opacity = (1 - t / (Math.PI * 2)) * 0.4 * this._opacityMultiplier * alpha;
+
+            cr.setSourceRGBA(color.r, color.g, color.b, opacity);
+            cr.arc(cx, cy, radius, 0, Math.PI * 2);
+            cr.setLineWidth(this._lineThickness * this._scale);
+            cr.stroke();
+        }
+
+        // Static center dot (slightly lighter blue)
+        const centerOpacity = 0.6 * this._opacityMultiplier * alpha;
+        cr.setSourceRGBA(0.471, 0.706, 1.0, centerOpacity);
+        cr.arc(cx, cy, this._centerSize * this._scale, 0, Math.PI * 2);
+        cr.fill();
+    }
+
+    _drawSuccess(cr, cx, cy, alpha) {
+        const color = STATE_COLORS.success;
+        const isTransitioningIn = this._state === 'success' && this._transitionProgress < 1;
+        const scale = isTransitioningIn ? Math.min(this._transitionProgress * 1.5, 1) : 1;
+        const overshoot = isTransitioningIn ? this._outBackEasing(this._transitionProgress) : 1;
+
+        // Success ring
+        cr.setSourceRGBA(color.r, color.g, color.b, 0.3 * scale * alpha);
+        cr.arc(cx, cy, 50 * this._scale, 0, Math.PI * 2);
+        cr.setLineWidth(2 * this._scale);
+        cr.stroke();
+
+        // Checkmark with overshoot animation
+        cr.save();
+        cr.translate(cx, cy);
+        cr.scale(overshoot * this._scale, overshoot * this._scale);
+
+        cr.setSourceRGBA(0.235, 0.863, 0.510, 0.8 * scale * alpha);
+        cr.setLineWidth(3);
+        cr.setLineCap(1);  // CAIRO_LINE_CAP_ROUND
+        cr.setLineJoin(1); // CAIRO_LINE_JOIN_ROUND
+
+        cr.moveTo(-15, 0);
+        cr.lineTo(-5, 10);
+        cr.lineTo(15, -10);
+        cr.stroke();
+
+        cr.restore();
+
+        // Subtle pulse ring when fully transitioned
+        if (scale >= 1) {
+            const pulse = (Math.sin(this._time * 2) + 1) / 2;
+            const pulseOpacity = 0.15 * (1 - pulse * 0.5) * alpha;
+            cr.setSourceRGBA(color.r, color.g, color.b, pulseOpacity);
+            cr.arc(cx, cy, (60 + pulse * 5) * this._scale, 0, Math.PI * 2);
+            cr.setLineWidth(1 * this._scale);
+            cr.stroke();
+        }
+    }
+
+    _drawFailure(cr, cx, cy, alpha) {
+        const color = STATE_COLORS.failure;
+        const isTransitioningIn = this._state === 'failure' && this._transitionProgress < 1;
+        const scale = isTransitioningIn ? Math.min(this._transitionProgress * 1.5, 1) : 1;
+
+        // Shake effect during transition
+        let shake = 0;
+        if (isTransitioningIn && this._transitionProgress < 0.3) {
+            shake = Math.sin(this._transitionProgress * 50) * 3 *
+                    (1 - this._transitionProgress / 0.3) * this._scale;
+        }
+
+        // Error ring
+        cr.setSourceRGBA(color.r, color.g, color.b, 0.3 * scale * alpha);
+        cr.arc(cx + shake, cy, 50 * this._scale, 0, Math.PI * 2);
+        cr.setLineWidth(2 * this._scale);
+        cr.stroke();
+
+        // X mark
+        cr.save();
+        cr.translate(cx + shake, cy);
+        cr.scale(scale * this._scale, scale * this._scale);
+
+        cr.setSourceRGBA(1.0, 0.471, 0.471, 0.8 * scale * alpha);
+        cr.setLineWidth(3);
+        cr.setLineCap(1);  // CAIRO_LINE_CAP_ROUND
+
+        cr.moveTo(-12, -12);
+        cr.lineTo(12, 12);
+        cr.moveTo(12, -12);
+        cr.lineTo(-12, 12);
+        cr.stroke();
+
+        cr.restore();
+
+        // Breaking wave / particle effect
+        if (isTransitioningIn) {
+            const numFragments = 8;
+            for (let i = 0; i < numFragments; i++) {
+                const angle = (i / numFragments) * Math.PI * 2;
+                const distance = this._transitionProgress * 30 * this._scale;
+                const x = cx + Math.cos(angle) * distance;
+                const y = cy + Math.sin(angle) * distance;
+                const opacity = 0.3 * (1 - this._transitionProgress) * alpha;
+
+                cr.setSourceRGBA(color.r, color.g, color.b, opacity);
+                cr.arc(x, y, 2 * this._scale, 0, Math.PI * 2);
+                cr.fill();
+            }
         }
     }
 
     destroy() {
-        this._stopAnimation();
+        this._stopAnimationLoop();
 
         if (this._monitorsChangedId) {
             Main.layoutManager.disconnect(this._monitorsChangedId);
