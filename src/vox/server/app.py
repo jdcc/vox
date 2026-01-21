@@ -1,10 +1,9 @@
 """Server application with WebSocket handling."""
 
 import asyncio
-import base64
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import websockets
 from websockets.server import WebSocketServerProtocol
@@ -23,6 +22,16 @@ class ServerState:
     transcriber: Transcriber
     agent: AgentProcessor
     config: Config
+
+
+@dataclass
+class AudioStreamState:
+    """Per-connection audio streaming state."""
+
+    buffer: bytearray = field(default_factory=bytearray)
+    sample_rate: int = 16000
+    channels: int = 1
+    active: bool = False
 
 
 class Server:
@@ -85,9 +94,11 @@ class Server:
         client_addr = websocket.remote_address
         logger.info(f"Client connected: {client_addr}")
 
+        audio_state = AudioStreamState()
+
         try:
             async for message in websocket:
-                await self._handle_message(websocket, message)
+                await self._handle_message(websocket, message, audio_state)
         except websockets.ConnectionClosed:
             logger.info(f"Client disconnected: {client_addr}")
         except Exception as e:
@@ -97,22 +108,27 @@ class Server:
         self,
         websocket: WebSocketServerProtocol,
         message: str | bytes,
+        audio_state: AudioStreamState,
     ) -> None:
         """Handle a message from a client.
 
         Args:
             websocket: The WebSocket connection
             message: The message received
+            audio_state: Per-connection audio streaming state
         """
         try:
             if isinstance(message, bytes):
-                message = message.decode("utf-8")
+                await self._handle_audio_chunk(websocket, message, audio_state)
+                return
 
             data = json.loads(message)
             msg_type = data.get("type")
 
-            if msg_type == "AUDIO":
-                await self._handle_audio(websocket, data)
+            if msg_type == "AUDIO_START":
+                self._start_audio_stream(audio_state, data)
+            elif msg_type == "AUDIO_END":
+                await self._end_audio_stream(websocket, audio_state)
             elif msg_type == "PING":
                 await websocket.send(json.dumps({"type": "PONG"}))
             else:
@@ -129,38 +145,85 @@ class Server:
                 json.dumps({"type": "ERROR", "error": str(e)})
             )
 
-    async def _handle_audio(
+    def _start_audio_stream(self, audio_state: AudioStreamState, data: dict) -> None:
+        """Initialize streaming state for a new audio upload."""
+        if audio_state.active:
+            logger.warning("Audio stream already active; resetting buffer")
+
+        audio_state.buffer.clear()
+        sample_rate = data.get("sample_rate", 16000)
+        channels = data.get("channels", 1)
+        try:
+            audio_state.sample_rate = int(sample_rate)
+        except (TypeError, ValueError):
+            audio_state.sample_rate = 16000
+        try:
+            audio_state.channels = int(channels)
+        except (TypeError, ValueError):
+            audio_state.channels = 1
+        audio_state.active = True
+
+    async def _handle_audio_chunk(
+        self,
+        _websocket: WebSocketServerProtocol,
+        chunk: bytes,
+        audio_state: AudioStreamState,
+    ) -> None:
+        """Handle a binary audio chunk."""
+        if not audio_state.active:
+            logger.warning("Received audio chunk without active stream")
+            return
+
+        audio_state.buffer.extend(chunk)
+
+    async def _end_audio_stream(
         self,
         websocket: WebSocketServerProtocol,
-        data: dict,
+        audio_state: AudioStreamState,
     ) -> None:
-        """Handle audio transcription request.
+        """Finalize streaming and process the audio."""
+        if not audio_state.active:
+            logger.warning("Received AUDIO_END without active stream")
+            return
 
-        Args:
-            websocket: The WebSocket connection
-            data: The message data containing audio
-        """
+        audio_state.active = False
+
+        if not audio_state.buffer:
+            await websocket.send(
+                json.dumps({"type": "ERROR", "error": "No audio data"})
+            )
+            return
+
+        audio_bytes = bytes(audio_state.buffer)
+        audio_state.buffer.clear()
+
+        await self._process_audio(
+            websocket,
+            audio_bytes,
+            sample_rate=audio_state.sample_rate,
+        )
+
+    async def _process_audio(
+        self,
+        websocket: WebSocketServerProtocol,
+        audio_bytes: bytes,
+        sample_rate: int = 16000,
+    ) -> None:
+        """Transcribe audio and send responses."""
         if self.transcriber is None or self.agent is None:
             await websocket.send(
                 json.dumps({"type": "ERROR", "error": "Server not initialized"})
             )
             return
 
-        audio_b64 = data.get("audio")
-        if not audio_b64:
-            await websocket.send(
-                json.dumps({"type": "ERROR", "error": "No audio data"})
-            )
-            return
-
-        audio_bytes = base64.b64decode(audio_b64)
-
         logger.info(f"Received {len(audio_bytes)} bytes of audio")
 
         await websocket.send(json.dumps({"type": "PROCESSING"}))
 
         result = await asyncio.to_thread(
-            self.transcriber.transcribe_bytes, audio_bytes
+            self.transcriber.transcribe_bytes,
+            audio_bytes,
+            sample_rate,
         )
 
         logger.info(f"Transcribed: {result.text}")

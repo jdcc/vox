@@ -106,7 +106,11 @@ class Client:
 
             if audio_bytes and self._loop:
                 asyncio.run_coroutine_threadsafe(
-                    self.connection.send_audio(audio_bytes),
+                    self.connection.send_audio(
+                        audio_bytes,
+                        sample_rate=self.audio.sample_rate,
+                        channels=self.audio.channels,
+                    ),
                     self._loop,
                 )
 

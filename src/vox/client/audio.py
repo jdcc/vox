@@ -26,6 +26,7 @@ class AudioRecorder:
             sample_rate: Sample rate for recording (default 16kHz for Whisper)
         """
         self.sample_rate = sample_rate
+        self.channels = CHANNELS
         self.is_recording = False
         self._audio_queue: queue.Queue[np.ndarray] = queue.Queue()
         self._stream: sd.InputStream | None = None
@@ -69,7 +70,7 @@ class AudioRecorder:
             if self._stream is None:
                 self._stream = sd.InputStream(
                     samplerate=self.sample_rate,
-                    channels=CHANNELS,
+                    channels=self.channels,
                     dtype=DTYPE,
                     blocksize=BLOCK_SIZE,
                     callback=self._audio_callback,

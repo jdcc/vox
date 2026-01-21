@@ -1,7 +1,6 @@
 """WebSocket client connection to server."""
 
 import asyncio
-import base64
 import json
 import logging
 from dataclasses import dataclass
@@ -12,6 +11,8 @@ import websockets
 from websockets.client import WebSocketClientProtocol
 
 logger = logging.getLogger(__name__)
+
+AUDIO_CHUNK_SIZE = 64 * 1024
 
 
 class ConnectionState(Enum):
@@ -213,26 +214,42 @@ class ServerConnection:
         else:
             self._reconnect_task = asyncio.create_task(self._reconnect())
 
-    async def send_audio(self, audio_bytes: bytes) -> None:
+    async def send_audio(
+        self,
+        audio_bytes: bytes,
+        sample_rate: int = 16000,
+        channels: int = 1,
+    ) -> None:
         """Send audio data to server for transcription.
 
         Args:
             audio_bytes: Raw PCM audio bytes
+            sample_rate: Sample rate of the audio
+            channels: Number of audio channels
         """
         if not self._ws or self._state != ConnectionState.CONNECTED:
             logger.warning("Not connected to server")
             return
 
-        audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
-
-        message = json.dumps({
-            "type": "AUDIO",
-            "audio": audio_b64,
-        })
-
         try:
-            await self._ws.send(message)
-            logger.debug(f"Sent {len(audio_bytes)} bytes of audio")
+            start_message = json.dumps({
+                "type": "AUDIO_START",
+                "sample_rate": sample_rate,
+                "channels": channels,
+                "format": "pcm_s16le",
+            })
+            await self._ws.send(start_message)
+
+            chunk_count = 0
+            for i in range(0, len(audio_bytes), AUDIO_CHUNK_SIZE):
+                await self._ws.send(audio_bytes[i:i + AUDIO_CHUNK_SIZE])
+                chunk_count += 1
+
+            await self._ws.send(json.dumps({"type": "AUDIO_END"}))
+
+            logger.debug(
+                f"Sent {len(audio_bytes)} bytes of audio in {chunk_count} chunks"
+            )
         except Exception as e:
             logger.error(f"Error sending audio: {e}")
 
