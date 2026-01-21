@@ -107,3 +107,20 @@ async def check_extension_available() -> bool:
     except Exception as e:
         logger.debug(f"Error checking extension: {e}")
         return False
+
+
+def check_input_permissions() -> bool:
+    """Check if user is in the input group for device access.
+
+    Returns:
+        True if user belongs to the input group
+    """
+    import grp
+    import os
+
+    try:
+        input_gid = grp.getgrnam("input").gr_gid
+    except KeyError:
+        return False
+
+    return input_gid in os.getgroups()

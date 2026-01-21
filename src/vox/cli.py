@@ -226,12 +226,13 @@ def check() -> None:
             click.echo("Run 'make install-deps' to set up udev rules, then log out/in.")
 
     click.echo()
-    click.echo("Input permissions:")
+    click.echo("Input permissions (for ydotool output):")
     if check_input_permissions():
         click.echo(f"  input group: {click.style('OK', fg='green')}")
     else:
         click.echo(f"  input group: {click.style('NOT IN GROUP', fg='red')}")
         click.echo()
+        click.echo("ydotool needs access to /dev/uinput for paste/type output.")
         click.echo("Add yourself to the input group with:")
         click.echo("  sudo usermod -aG input $USER")
         click.echo("Then log out and back in.")

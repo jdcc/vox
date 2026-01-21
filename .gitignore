@@ -40,6 +40,7 @@ Thumbs.db
 
 # Logs
 *.log
+.coverage
 
 # Local config (keep config.yaml.example)
 # ~/.config/vox/ is the actual config location

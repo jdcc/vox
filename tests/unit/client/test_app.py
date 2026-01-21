@@ -1,0 +1,249 @@
+"""Tests for vox.client.app."""
+
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from vox.client.app import Client
+from vox.client.connection import ConnectionState, TranscriptionResponse
+
+
+def test_on_hotkey_press_starts_recording(monkeypatch) -> None:
+    client = Client()
+    client.connection._state = ConnectionState.CONNECTED
+    client.audio.start_recording = MagicMock()
+    client.overlay.recording = MagicMock()
+
+    client._on_hotkey_press()
+
+    assert client._is_recording is True
+    client.audio.start_recording.assert_called_once()
+
+
+def test_on_hotkey_press_ignores_when_disconnected() -> None:
+    client = Client()
+    client.connection._state = ConnectionState.DISCONNECTED
+    client.audio.start_recording = MagicMock()
+
+    client._on_hotkey_press()
+
+    client.audio.start_recording.assert_not_called()
+
+
+def test_on_hotkey_release_sends_audio(monkeypatch) -> None:
+    client = Client()
+    client._is_recording = True
+    client.audio.stop_recording = MagicMock(return_value=b"data")
+    client.overlay.processing = MagicMock()
+    client._loop = asyncio.get_event_loop()
+
+    called = {}
+
+    def run_stub(coro, _loop):
+        coro.close()
+        called["coro"] = coro
+
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", run_stub)
+
+    client._on_hotkey_release()
+
+    assert "coro" in called
+
+
+def test_on_hotkey_release_empty_audio(monkeypatch) -> None:
+    client = Client()
+    client._is_recording = True
+    client.audio.stop_recording = MagicMock(return_value=b"")
+    client.overlay.processing = MagicMock()
+    client._loop = asyncio.get_event_loop()
+
+    run_stub = MagicMock()
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", run_stub)
+
+    client._on_hotkey_release()
+
+    run_stub.assert_not_called()
+
+
+def test_on_hotkey_release_not_recording() -> None:
+    client = Client()
+    client._is_recording = False
+    client.audio.stop_recording = MagicMock()
+
+    client._on_hotkey_release()
+
+    client.audio.stop_recording.assert_not_called()
+
+
+def test_on_transcription_processing() -> None:
+    client = Client()
+    response = TranscriptionResponse(text="partial", processing=True)
+
+    client._on_transcription(response)
+
+    assert client._pending_output is None
+
+
+def test_on_transcription_final(monkeypatch) -> None:
+    client = Client()
+    response = TranscriptionResponse(text="final", processing=False)
+    client.overlay.success = MagicMock()
+    client._loop = asyncio.get_event_loop()
+
+    called = {}
+
+    def run_stub(coro, _loop):
+        coro.close()
+        called["coro"] = coro
+
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", run_stub)
+
+    client._on_transcription(response)
+
+    assert client._pending_output == "final"
+    assert "coro" in called
+
+
+def test_on_transcription_final_no_loop() -> None:
+    client = Client()
+    response = TranscriptionResponse(text="final", processing=False)
+    client.overlay.success = MagicMock()
+
+    client._on_transcription(response)
+
+    assert client._pending_output == "final"
+
+
+def test_on_connection_state_change() -> None:
+    client = Client()
+    client._on_connection_state_change(ConnectionState.CONNECTED)
+    client._on_connection_state_change(ConnectionState.DISCONNECTED)
+    client._on_connection_state_change(ConnectionState.CONNECTING)
+
+
+@pytest.mark.asyncio
+async def test_output_text(monkeypatch) -> None:
+    client = Client()
+    client.output.output = AsyncMock()
+    client.overlay.hide = MagicMock()
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    await client._output_text("hi")
+
+    client.output.output.assert_awaited_once_with("hi")
+    client.overlay.hide.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_output_text_empty(monkeypatch) -> None:
+    client = Client()
+    client.output.output = AsyncMock()
+    client.overlay.hide = MagicMock()
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    await client._output_text("")
+
+    client.output.output.assert_not_called()
+    client.overlay.hide.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_start_success(monkeypatch) -> None:
+    client = Client()
+
+    monkeypatch.setattr("vox.client.app.check_extension_available", AsyncMock(return_value=True))
+    monkeypatch.setattr("vox.client.app.check_wayland_tools", lambda: {"wl-clipboard": True})
+    client.overlay.start = AsyncMock()
+    client.connection.start = AsyncMock()
+
+    hotkey = MagicMock()
+    hotkey.start = AsyncMock()
+    monkeypatch.setattr("vox.client.app.HotkeyListener", lambda **_kwargs: hotkey)
+
+    async def sleep_stub(_delay):
+        client._running = False
+
+    monkeypatch.setattr(asyncio, "sleep", sleep_stub)
+
+    await client.start()
+
+    client.connection.start.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_start_hotkey_failure(monkeypatch) -> None:
+    client = Client()
+
+    monkeypatch.setattr("vox.client.app.check_extension_available", AsyncMock(return_value=False))
+    monkeypatch.setattr("vox.client.app.check_wayland_tools", lambda: {"wl-clipboard": False})
+    client.overlay.start = AsyncMock()
+    client.connection.start = AsyncMock()
+
+    hotkey = MagicMock()
+    hotkey.start = AsyncMock(side_effect=RuntimeError("fail"))
+    monkeypatch.setattr("vox.client.app.HotkeyListener", lambda **_kwargs: hotkey)
+
+    await client.start()
+
+
+@pytest.mark.asyncio
+async def test_stop(monkeypatch) -> None:
+    client = Client()
+    client.hotkey = MagicMock()
+    client.hotkey.stop = AsyncMock()
+    client.connection.disconnect = AsyncMock()
+    client.audio.close = MagicMock()
+    client.overlay.stop = AsyncMock()
+
+    await client.stop()
+
+    client.hotkey.stop.assert_awaited_once()
+    client.connection.disconnect.assert_awaited_once()
+    client.audio.close.assert_called_once()
+    client.overlay.stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stop_no_hotkey(monkeypatch) -> None:
+    client = Client()
+    client.hotkey = None
+    client.connection.disconnect = AsyncMock()
+    client.audio.close = MagicMock()
+    client.overlay.stop = AsyncMock()
+
+    await client.stop()
+
+    client.connection.disconnect.assert_awaited_once()
+    client.audio.close.assert_called_once()
+    client.overlay.stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_client(monkeypatch) -> None:
+    from vox.client import app as app_module
+
+    runner = AsyncMock()
+    stopper = AsyncMock()
+    monkeypatch.setattr(app_module.Client, "start", runner)
+    monkeypatch.setattr(app_module.Client, "stop", stopper)
+
+    handled = {}
+
+    class FakeLoop:
+        def add_signal_handler(self, _sig, handler):
+            handled["handler"] = handler
+
+    monkeypatch.setattr(asyncio, "get_event_loop", lambda: FakeLoop())
+
+    def create_task_stub(coro):
+        coro.close()
+        return None
+
+    monkeypatch.setattr(asyncio, "create_task", create_task_stub)
+
+    await app_module.run_client()
+
+    runner.assert_awaited_once()
+    assert "handler" in handled
+    handled["handler"]()
