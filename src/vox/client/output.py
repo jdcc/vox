@@ -34,9 +34,11 @@ class OutputHandler:
         if not text:
             return
 
+        did_copy = False
         if self.method in ("clipboard", "both"):
             logger.debug("Copying text to clipboard")
             await self._copy_to_clipboard(text)
+            did_copy = True
             logger.debug("Copied")
 
         if self.method in ("type", "both"):
@@ -44,6 +46,8 @@ class OutputHandler:
             await asyncio.sleep(0.1)
 
             if self.typing_method == "paste":
+                if not did_copy:
+                    await self._copy_to_clipboard(text)
                 await self._paste()
             else:
                 await self._type_text(text)

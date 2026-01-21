@@ -79,6 +79,46 @@ async def test_output_type_paste(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_output_type_paste_copies_clipboard(monkeypatch) -> None:
+    handler = OutputHandler(method="type", typing_method="paste")
+    calls = []
+
+    async def copy_stub(_text: str) -> None:
+        calls.append("copy")
+
+    async def paste_stub() -> None:
+        calls.append("paste")
+
+    monkeypatch.setattr(handler, "_copy_to_clipboard", copy_stub)
+    monkeypatch.setattr(handler, "_paste", paste_stub)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    await handler.output("hello")
+
+    assert calls == ["copy", "paste"]
+
+
+@pytest.mark.asyncio
+async def test_output_both_paste_copies_once(monkeypatch) -> None:
+    handler = OutputHandler(method="both", typing_method="paste")
+    calls = []
+
+    async def copy_stub(_text: str) -> None:
+        calls.append("copy")
+
+    async def paste_stub() -> None:
+        calls.append("paste")
+
+    monkeypatch.setattr(handler, "_copy_to_clipboard", copy_stub)
+    monkeypatch.setattr(handler, "_paste", paste_stub)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    await handler.output("hello")
+
+    assert calls == ["copy", "paste"]
+
+
+@pytest.mark.asyncio
 async def test_output_type_direct(monkeypatch) -> None:
     handler = OutputHandler(method="type", typing_method="type")
     type_called = False
@@ -218,6 +258,25 @@ async def test_type_text_success(monkeypatch) -> None:
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
 
     await handler._type_text("hello")
+
+
+@pytest.mark.asyncio
+async def test_type_text_preserves_leading_chars(monkeypatch) -> None:
+    handler = OutputHandler()
+    process = _FakeProcess(returncode=0)
+    captured_args = None
+
+    async def create_proc(*args, **_kwargs):
+        nonlocal captured_args
+        captured_args = args
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
+
+    text = "  --leading"
+    await handler._type_text(text)
+
+    assert captured_args == ("ydotool", "type", "--", text)
 
 
 @pytest.mark.asyncio
