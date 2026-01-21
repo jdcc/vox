@@ -65,17 +65,24 @@ async def test_output_clipboard_only(monkeypatch) -> None:
 async def test_output_type_paste(monkeypatch) -> None:
     handler = OutputHandler(method="type", typing_method="paste")
     paste_called = False
+    copy_called = False
+
+    async def copy_stub(_text: str) -> None:
+        nonlocal copy_called
+        copy_called = True
 
     async def paste_stub():
         nonlocal paste_called
         paste_called = True
 
+    monkeypatch.setattr(handler, "_copy_to_clipboard", copy_stub)
     monkeypatch.setattr(handler, "_paste", paste_stub)
     monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
     await handler.output("hi")
 
     assert paste_called is True
+    assert copy_called is True
 
 
 @pytest.mark.asyncio
