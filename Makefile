@@ -1,4 +1,4 @@
-.PHONY: build run stop logs client server tui check install clean setup setup-full start start-bg install-extension uninstall-extension
+.PHONY: build run stop logs client server tui check test install clean setup setup-full start start-bg install-extension uninstall-extension
 
 # =============================================================================
 # Quick Start (from clean machine)
@@ -76,6 +76,9 @@ tui:
 
 check:
 	uv run vox check
+
+test:
+	uv run pytest --cov=src/vox --cov-branch --cov-report=term-missing --cov-fail-under=100
 
 # Setup commands
 install:
@@ -169,6 +172,7 @@ help:
 	@echo "  make server     - Run the server locally"
 	@echo "  make tui        - Open the TUI"
 	@echo "  make check      - Check system dependencies"
+	@echo "  make test       - Run tests with coverage"
 	@echo ""
 	@echo "Setup (individual steps):"
 	@echo "  make install    - Install Python dependencies"
