@@ -85,6 +85,8 @@ class Client:
         """
         if text:
             await self.output.output(text)
+        await asyncio.sleep(1)
+        self.overlay.hide()
 
     def _on_hotkey_press(self) -> None:
         """Handle hotkey press (start recording)."""

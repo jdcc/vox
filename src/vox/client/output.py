@@ -35,7 +35,9 @@ class OutputHandler:
             return
 
         if self.method in ("clipboard", "both"):
+            logger.debug("Copying text to clipboard")
             await self._copy_to_clipboard(text)
+            logger.debug("Copied")
 
         if self.method in ("type", "both"):
             # Small delay to ensure clipboard is ready
@@ -52,24 +54,27 @@ class OutputHandler:
         Args:
             text: Text to copy
         """
+        process = await asyncio.create_subprocess_exec(
+            "wl-copy",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        # Write input and close stdin so wl-copy can start serving
+        process.stdin.write(text.encode("utf-8"))
+        await process.stdin.drain()
+        process.stdin.close()
+
         try:
-            process = await asyncio.create_subprocess_exec(
-                "wl-copy",
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await process.communicate(input=text.encode("utf-8"))
-
-            if process.returncode == 0:
-                logger.debug(f"Copied to clipboard: {text[:50]}...")
-            else:
-                logger.error(f"wl-copy failed: {stderr.decode()}")
-
-        except FileNotFoundError:
-            logger.error("wl-copy not found. Install with: sudo apt install wl-clipboard")
-        except Exception as e:
-            logger.error(f"Error copying to clipboard: {e}")
+            await asyncio.wait_for(process.wait(), timeout=0.05)
+            # If we get here, it already exited (maybe error)
+            if process.returncode != 0:
+                err = (await process.stderr.read()).decode(errors="replace")
+                logger.error(f"Error copying to clipboard: {err}")
+        except asyncio.TimeoutError:
+            logger.debug(f"Copied to clipboard: {text[:50]}...")
+            pass
 
     async def _paste(self) -> None:
         """Paste from clipboard using ydotool to simulate Ctrl+V."""
