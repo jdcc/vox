@@ -31,10 +31,10 @@ const DBUS_INTERFACE = `
 
 // State colors (0.0-1.0 range for Cairo)
 const STATE_COLORS = {
-    recording:  { r: 1.0,   g: 0.392, b: 0.392 },  // rgba(255,100,100)
-    processing: { r: 0.392, g: 0.627, b: 1.0   },  // rgba(100,160,255)
-    success:    { r: 0.196, g: 0.784, b: 0.471 },  // rgba(50,200,120)
-    failure:    { r: 1.0,   g: 0.392, b: 0.392 },  // rgba(255,100,100)
+    recording: { r: 1.0, g: 0.392, b: 0.392 },  // rgba(255,100,100)
+    processing: { r: 0.392, g: 0.627, b: 1.0 },  // rgba(100,160,255)
+    success: { r: 0.196, g: 0.784, b: 0.471 },  // rgba(50,200,120)
+    failure: { r: 1.0, g: 0.392, b: 0.392 },  // rgba(255,100,100)
 };
 
 class VoxIndicator {
@@ -92,10 +92,18 @@ class VoxIndicator {
         const monitor = Main.layoutManager.primaryMonitor;
         if (!monitor) return;
 
-        // Top-right corner with padding
         const padding = 16;
+        // Top-right corner with padding
+        /*
         this._widget.set_position(
             monitor.x + monitor.width - this._widget.width - padding,
+            monitor.y + Main.panel.height + padding
+        );
+        */
+
+        // Top-center
+        this._widget.set_position(
+            monitor.x + (monitor.width - this._widget.width) / 2,
             monitor.y + Main.panel.height + padding
         );
     }
@@ -319,7 +327,7 @@ class VoxIndicator {
         let shake = 0;
         if (isTransitioningIn && this._transitionProgress < 0.3) {
             shake = Math.sin(this._transitionProgress * 50) * 3 *
-                    (1 - this._transitionProgress / 0.3) * this._scale;
+                (1 - this._transitionProgress / 0.3) * this._scale;
         }
 
         // Error ring
