@@ -128,12 +128,14 @@ class Client:
             )
 
         tools = check_wayland_tools()
-        missing = [t for t, available in tools.items() if not available]
-        if missing:
+        missing_clipboard = [t for t in ("wl-copy", "wl-paste") if not tools.get(t, False)]
+        if missing_clipboard:
             logger.warning(
-                f"Missing Wayland tools: {', '.join(missing)}. "
-                "Install with: sudo apt install wl-clipboard wtype"
+                f"Missing Wayland tools: {', '.join(missing_clipboard)}. "
+                "Install with: sudo apt install wl-clipboard"
             )
+
+        await self.output.start()
 
         await self.overlay.start()
 
@@ -168,6 +170,7 @@ class Client:
         if self.hotkey:
             await self.hotkey.stop()
 
+        await self.output.stop()
         await self.connection.disconnect()
         self.audio.close()
         await self.overlay.stop()

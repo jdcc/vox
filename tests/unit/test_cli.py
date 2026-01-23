@@ -248,10 +248,10 @@ def test_config_init_overwrite(monkeypatch, tmp_path) -> None:
 def test_check_command(monkeypatch, tmp_path) -> None:
     runner = CliRunner()
     monkeypatch.setattr(cli_module, "get_config_path", MagicMock(return_value=tmp_path / "config.yaml"))
-    monkeypatch.setattr("vox.client.output.check_wayland_tools", lambda: {"ydotool": True})
-    monkeypatch.setattr("vox.client.output.check_ydotool_daemon", lambda: True)
-    monkeypatch.setattr("vox.client.hotkey.check_input_permissions", lambda: True)
-
+    monkeypatch.setattr(
+        "vox.client.output.check_wayland_tools",
+        lambda: {"wl-copy": True, "wl-paste": True},
+    )
     result = runner.invoke(cli_module.main, ["check"])
 
     assert result.exit_code == 0
@@ -265,28 +265,23 @@ def test_check_command_missing_tools(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(cli_module, "get_config_path", MagicMock(return_value=config_path))
     monkeypatch.setattr(
         "vox.client.output.check_wayland_tools",
-        lambda: {"wl-copy": False, "ydotool": True},
+        lambda: {"wl-copy": False, "wl-paste": True},
     )
-    monkeypatch.setattr("vox.client.output.check_ydotool_daemon", lambda: False)
-    monkeypatch.setattr("vox.client.hotkey.check_input_permissions", lambda: False)
-
     result = runner.invoke(cli_module.main, ["check"])
 
     assert result.exit_code == 0
     assert "Install missing tools" in result.output
 
 
-def test_check_command_no_ydotool(monkeypatch, tmp_path) -> None:
+def test_check_command_all_tools_present(monkeypatch, tmp_path) -> None:
     runner = CliRunner()
     config_path = tmp_path / "config.yaml"
     config_path.write_text("data")
     monkeypatch.setattr(cli_module, "get_config_path", MagicMock(return_value=config_path))
     monkeypatch.setattr(
         "vox.client.output.check_wayland_tools",
-        lambda: {"wl-copy": True, "ydotool": False},
+        lambda: {"wl-copy": True, "wl-paste": True},
     )
-    monkeypatch.setattr("vox.client.hotkey.check_input_permissions", lambda: True)
-
     result = runner.invoke(cli_module.main, ["check"])
 
     assert result.exit_code == 0

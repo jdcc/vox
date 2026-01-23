@@ -12,30 +12,67 @@ from vox.client.output import OutputHandler
 
 class _FakeStdin:
     def __init__(self):
-        self.data = b""
+        self.data = ""
         self.closed = False
 
-    def write(self, chunk: bytes) -> None:
+    def write(self, chunk: str) -> None:
         self.data += chunk
-
-    async def drain(self) -> None:
-        return None
 
     def close(self) -> None:
         self.closed = True
 
 
 class _FakeProcess:
-    def __init__(self, returncode: int = 0, stderr: bytes = b"") -> None:
+    def __init__(self, returncode: int = 0, stderr: str = "") -> None:
         self.returncode = returncode
-        self.stderr = SimpleNamespace(read=AsyncMock(return_value=stderr))
+        self.stderr = SimpleNamespace(read=lambda: stderr)
         self.stdin = _FakeStdin()
+        self.raise_timeout = False
 
-    async def wait(self) -> None:
+    def wait(self, timeout: float | None = None) -> None:
+        if self.raise_timeout:
+            raise output_module.subprocess.TimeoutExpired(cmd="wl-copy", timeout=timeout)
         return None
 
-    async def communicate(self):
-        return (b"", b"")
+
+class _FakePopen:
+    def __init__(self, stdin: _FakeStdin | None, returncode: int = 0, stderr: str = "") -> None:
+        self.stdin = stdin
+        self.returncode = returncode
+        self.stderr = SimpleNamespace(read=lambda: stderr)
+        self.raise_timeout = False
+
+    def wait(self, timeout: float | None = None) -> None:
+        if self.raise_timeout:
+            raise output_module.subprocess.TimeoutExpired(cmd="wl-copy", timeout=timeout)
+        return None
+
+
+class _FakePortalInput:
+    def __init__(self):
+        self.active = True
+        self.paste_called = False
+        self.type_called = False
+        self.started = False
+        self.stopped = False
+        self.raise_on_paste = False
+        self.raise_on_type = False
+
+    async def send_paste(self) -> None:
+        if self.raise_on_paste:
+            raise RuntimeError("paste failed")
+        self.paste_called = True
+
+    async def type_text(self, _text: str) -> None:
+        if self.raise_on_type:
+            raise RuntimeError("type failed")
+        self.type_called = True
+
+    async def start(self) -> None:
+        self.started = True
+
+    async def stop(self) -> None:
+        self.stopped = True
 
 
 @pytest.mark.asyncio
@@ -77,6 +114,7 @@ async def test_output_type_paste(monkeypatch) -> None:
 
     monkeypatch.setattr(handler, "_copy_to_clipboard", copy_stub)
     monkeypatch.setattr(handler, "_paste", paste_stub)
+    monkeypatch.setattr(handler, "_wait_for_clipboard", AsyncMock(return_value=True))
     monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
     await handler.output("hi")
@@ -98,6 +136,7 @@ async def test_output_type_paste_copies_clipboard(monkeypatch) -> None:
 
     monkeypatch.setattr(handler, "_copy_to_clipboard", copy_stub)
     monkeypatch.setattr(handler, "_paste", paste_stub)
+    monkeypatch.setattr(handler, "_wait_for_clipboard", AsyncMock(return_value=True))
     monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
     await handler.output("hello")
@@ -118,6 +157,7 @@ async def test_output_both_paste_copies_once(monkeypatch) -> None:
 
     monkeypatch.setattr(handler, "_copy_to_clipboard", copy_stub)
     monkeypatch.setattr(handler, "_paste", paste_stub)
+    monkeypatch.setattr(handler, "_wait_for_clipboard", AsyncMock(return_value=True))
     monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
     await handler.output("hello")
@@ -143,30 +183,105 @@ async def test_output_type_direct(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_start_portal_not_needed(monkeypatch) -> None:
+    handler = OutputHandler(method="clipboard")
+    await handler.start()
+
+    assert handler._portal_input is None
+
+
+@pytest.mark.asyncio
+async def test_start_portal_wayland(monkeypatch) -> None:
+    handler = OutputHandler(method="type")
+    portal = _FakePortalInput()
+
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    monkeypatch.setattr(output_module, "PortalInput", lambda: portal)
+
+    await handler.start()
+
+    assert handler._portal_input is portal
+    assert portal.started is True
+
+
+@pytest.mark.asyncio
+async def test_start_portal_non_wayland(monkeypatch) -> None:
+    handler = OutputHandler(method="type")
+    monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+
+    await handler.start()
+
+    assert handler._portal_input is None
+
+
+@pytest.mark.asyncio
+async def test_start_portal_active(monkeypatch) -> None:
+    handler = OutputHandler(method="type")
+    portal = _FakePortalInput()
+    handler._portal_input = portal
+
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+
+    await handler.start()
+
+    assert portal.started is False
+
+
+@pytest.mark.asyncio
+async def test_start_portal_failure(monkeypatch, caplog) -> None:
+    handler = OutputHandler(method="type")
+
+    class _FailPortal:
+        active = False
+
+        async def start(self) -> None:
+            raise RuntimeError("boom")
+
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    monkeypatch.setattr(output_module, "PortalInput", lambda: _FailPortal())
+
+    await handler.start()
+
+    assert handler._portal_input is None
+    assert "Portal input unavailable" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stop_portal(monkeypatch) -> None:
+    handler = OutputHandler(method="type")
+    portal = _FakePortalInput()
+    handler._portal_input = portal
+
+    await handler.stop()
+
+    assert portal.stopped is True
+
+
+@pytest.mark.asyncio
 async def test_copy_to_clipboard_success(monkeypatch) -> None:
     handler = OutputHandler()
     process = _FakeProcess(returncode=0)
 
-    async def create_proc(*_args, **_kwargs):
+    def popen_stub(*_args, **_kwargs):
         return process
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
+    monkeypatch.setattr(output_module.subprocess, "Popen", popen_stub)
 
     await handler._copy_to_clipboard("text")
 
-    assert process.stdin.data == b"text"
+    assert process.stdin.data == "text"
     assert process.stdin.closed is True
 
 
 @pytest.mark.asyncio
 async def test_copy_to_clipboard_error(monkeypatch) -> None:
     handler = OutputHandler()
-    process = _FakeProcess(returncode=1, stderr=b"bad")
+    process = _FakeProcess(returncode=1, stderr="bad")
 
-    async def create_proc(*_args, **_kwargs):
+    def popen_stub(*_args, **_kwargs):
         return process
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
+    monkeypatch.setattr(output_module.subprocess, "Popen", popen_stub)
 
     await handler._copy_to_clipboard("text")
 
@@ -175,165 +290,66 @@ async def test_copy_to_clipboard_error(monkeypatch) -> None:
 async def test_copy_to_clipboard_timeout(monkeypatch) -> None:
     handler = OutputHandler()
     process = _FakeProcess(returncode=0)
+    process.raise_timeout = True
 
-    async def create_proc(*_args, **_kwargs):
+    def popen_stub(*_args, **_kwargs):
         return process
 
-    async def wait_for_stub(*_args, **_kwargs):
-        _args[0].close()
-        raise asyncio.TimeoutError
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
-    monkeypatch.setattr(asyncio, "wait_for", wait_for_stub)
+    monkeypatch.setattr(output_module.subprocess, "Popen", popen_stub)
 
     await handler._copy_to_clipboard("text")
 
 
 @pytest.mark.asyncio
-async def test_paste_success(monkeypatch) -> None:
+async def test_paste_without_portal() -> None:
     handler = OutputHandler()
-    process = _FakeProcess(returncode=0)
+    await handler._paste()
 
-    async def create_proc(*_args, **_kwargs):
-        return process
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
+@pytest.mark.asyncio
+async def test_paste_portal() -> None:
+    handler = OutputHandler()
+    portal = _FakePortalInput()
+    handler._portal_input = portal
+
+    await handler._paste()
+
+    assert portal.paste_called is True
+
+
+@pytest.mark.asyncio
+async def test_paste_portal_error() -> None:
+    handler = OutputHandler()
+    portal = _FakePortalInput()
+    portal.raise_on_paste = True
+    handler._portal_input = portal
 
     await handler._paste()
 
 
 @pytest.mark.asyncio
-async def test_paste_ydotoold_error(monkeypatch) -> None:
+async def test_type_text_without_portal() -> None:
     handler = OutputHandler()
-    process = _FakeProcess(returncode=1, stderr=b"ydotoold socket")
-
-    async def create_proc(*_args, **_kwargs):
-        return process
-
-    process.communicate = AsyncMock(return_value=(b"", process.stderr.read.return_value))
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
-
-    await handler._paste()
-
-
-@pytest.mark.asyncio
-async def test_paste_other_error(monkeypatch) -> None:
-    handler = OutputHandler()
-    process = _FakeProcess(returncode=1, stderr=b"other")
-
-    async def create_proc(*_args, **_kwargs):
-        return process
-
-    process.communicate = AsyncMock(return_value=(b"", process.stderr.read.return_value))
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
-
-    await handler._paste()
-
-
-@pytest.mark.asyncio
-async def test_paste_file_not_found(monkeypatch) -> None:
-    handler = OutputHandler()
-
-    async def create_proc(*_args, **_kwargs):
-        raise FileNotFoundError
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
-
-    await handler._paste()
-
-
-@pytest.mark.asyncio
-async def test_paste_exception(monkeypatch) -> None:
-    handler = OutputHandler()
-
-    async def create_proc(*_args, **_kwargs):
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
-
-    await handler._paste()
-
-
-@pytest.mark.asyncio
-async def test_type_text_success(monkeypatch) -> None:
-    handler = OutputHandler()
-    process = _FakeProcess(returncode=0)
-
-    async def create_proc(*_args, **_kwargs):
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
-
     await handler._type_text("hello")
 
 
 @pytest.mark.asyncio
-async def test_type_text_preserves_leading_chars(monkeypatch) -> None:
+async def test_type_text_portal() -> None:
     handler = OutputHandler()
-    process = _FakeProcess(returncode=0)
-    captured_args = None
-
-    async def create_proc(*args, **_kwargs):
-        nonlocal captured_args
-        captured_args = args
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
-
-    text = "  --leading"
-    await handler._type_text(text)
-
-    assert captured_args == ("ydotool", "type", "--", text)
-
-
-@pytest.mark.asyncio
-async def test_type_text_ydotoold_error(monkeypatch) -> None:
-    handler = OutputHandler()
-    process = _FakeProcess(returncode=1, stderr=b"ydotoold socket")
-
-    async def create_proc(*_args, **_kwargs):
-        return process
-
-    process.communicate = AsyncMock(return_value=(b"", process.stderr.read.return_value))
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
+    portal = _FakePortalInput()
+    handler._portal_input = portal
 
     await handler._type_text("hello")
 
-
-@pytest.mark.asyncio
-async def test_type_text_other_error(monkeypatch) -> None:
-    handler = OutputHandler()
-    process = _FakeProcess(returncode=1, stderr=b"other")
-
-    async def create_proc(*_args, **_kwargs):
-        return process
-
-    process.communicate = AsyncMock(return_value=(b"", process.stderr.read.return_value))
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
-
-    await handler._type_text("hello")
+    assert portal.type_called is True
 
 
 @pytest.mark.asyncio
-async def test_type_text_file_not_found(monkeypatch) -> None:
+async def test_type_text_portal_error() -> None:
     handler = OutputHandler()
-
-    async def create_proc(*_args, **_kwargs):
-        raise FileNotFoundError
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
-
-    await handler._type_text("hello")
-
-
-@pytest.mark.asyncio
-async def test_type_text_exception(monkeypatch) -> None:
-    handler = OutputHandler()
-
-    async def create_proc(*_args, **_kwargs):
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
+    portal = _FakePortalInput()
+    portal.raise_on_type = True
+    handler._portal_input = portal
 
     await handler._type_text("hello")
 
@@ -371,43 +387,128 @@ def test_check_wayland_tools_exception(monkeypatch) -> None:
     assert tools["wl-copy"] is False
 
 
-def test_check_ydotool_daemon_access(monkeypatch) -> None:
-    monkeypatch.setattr("os.access", lambda *_args, **_kwargs: True)
+@pytest.mark.asyncio
+async def test_output_type_paste_recopies_on_mismatch(monkeypatch) -> None:
+    handler = OutputHandler(method="type", typing_method="paste")
+    calls = []
 
-    assert output_module.check_ydotool_daemon() is True
+    async def copy_stub(_text: str) -> None:
+        calls.append("copy")
 
+    async def paste_stub() -> None:
+        calls.append("paste")
 
-def test_check_ydotool_daemon_runtime_socket(monkeypatch) -> None:
-    monkeypatch.setattr("os.access", lambda *_args, **_kwargs: False)
-    monkeypatch.setenv("XDG_RUNTIME_DIR", "/tmp/runtime")
+    monkeypatch.setattr(handler, "_copy_to_clipboard", copy_stub)
+    monkeypatch.setattr(handler, "_paste", paste_stub)
+    monkeypatch.setattr(handler, "_wait_for_clipboard", AsyncMock(side_effect=[False, True]))
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
-    def exists_stub(path):
-        return path == "/tmp/runtime/.ydotool_socket"
+    await handler.output("hello")
 
-    monkeypatch.setattr("os.path.exists", exists_stub)
-
-    assert output_module.check_ydotool_daemon() is True
-
-
-def test_check_ydotool_daemon_tmp_socket(monkeypatch) -> None:
-    monkeypatch.setattr("os.access", lambda *_args, **_kwargs: False)
-    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
-    monkeypatch.setattr("os.path.exists", lambda path: path == "/tmp/.ydotool_socket")
-
-    assert output_module.check_ydotool_daemon() is True
+    assert calls == ["copy", "copy", "paste"]
 
 
-def test_check_ydotool_daemon_runtime_missing_tmp_socket(monkeypatch) -> None:
-    monkeypatch.setattr("os.access", lambda *_args, **_kwargs: False)
-    monkeypatch.setenv("XDG_RUNTIME_DIR", "/tmp/runtime")
-    monkeypatch.setattr("os.path.exists", lambda path: path == "/tmp/.ydotool_socket")
+def test_copy_to_clipboard_sync_no_stdin(monkeypatch) -> None:
+    handler = OutputHandler()
+    process = _FakePopen(stdin=None)
 
-    assert output_module.check_ydotool_daemon() is True
+    def popen_stub(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(output_module.subprocess, "Popen", popen_stub)
+
+    handler._copy_to_clipboard_sync("text")
 
 
-def test_check_ydotool_daemon_false(monkeypatch) -> None:
-    monkeypatch.setattr("os.access", lambda *_args, **_kwargs: False)
-    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
-    monkeypatch.setattr("os.path.exists", lambda *_args: False)
+def test_copy_to_clipboard_sync_write_error(monkeypatch) -> None:
+    handler = OutputHandler()
+    stdin = _FakeStdin()
 
-    assert output_module.check_ydotool_daemon() is False
+    def write_raises(_text: str) -> None:
+        raise OSError("write fail")
+
+    stdin.write = write_raises
+    process = _FakePopen(stdin=stdin)
+
+    def popen_stub(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(output_module.subprocess, "Popen", popen_stub)
+
+    handler._copy_to_clipboard_sync("text")
+
+
+@pytest.mark.asyncio
+async def test_wait_for_clipboard_missing_tool(monkeypatch) -> None:
+    handler = OutputHandler()
+
+    monkeypatch.setattr(output_module.shutil, "which", lambda _name: None)
+
+    assert await handler._wait_for_clipboard("text") is True
+
+
+@pytest.mark.asyncio
+async def test_wait_for_clipboard_match(monkeypatch) -> None:
+    handler = OutputHandler()
+
+    class _PasteProcess:
+        async def communicate(self):
+            return (b"hello", b"")
+
+    async def create_proc(*_args, **_kwargs):
+        return _PasteProcess()
+
+    monkeypatch.setattr(output_module.shutil, "which", lambda _name: "/usr/bin/wl-paste")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
+
+    assert await handler._wait_for_clipboard("hello") is True
+
+
+@pytest.mark.asyncio
+async def test_wait_for_clipboard_timeout(monkeypatch) -> None:
+    handler = OutputHandler()
+
+    class _PasteProcess:
+        async def communicate(self):
+            return (b"nope", b"")
+
+    async def create_proc(*_args, **_kwargs):
+        return _PasteProcess()
+
+    class _FakeLoop:
+        def __init__(self):
+            self._times = iter([0.0, 0.2])
+
+        def time(self) -> float:
+            return next(self._times)
+
+    loop = _FakeLoop()
+    monkeypatch.setattr(output_module.shutil, "which", lambda _name: "/usr/bin/wl-paste")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: loop)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    assert await handler._wait_for_clipboard("hello", timeout=0.1) is False
+
+
+@pytest.mark.asyncio
+async def test_wait_for_clipboard_missing_paste(monkeypatch) -> None:
+    handler = OutputHandler()
+
+    async def create_proc(*_args, **_kwargs):
+        raise FileNotFoundError
+
+    class _FakeLoop:
+        def __init__(self):
+            self._times = iter([0.0, 0.2])
+
+        def time(self) -> float:
+            return next(self._times)
+
+    loop = _FakeLoop()
+    monkeypatch.setattr(output_module.shutil, "which", lambda _name: "/usr/bin/wl-paste")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: loop)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    assert await handler._wait_for_clipboard("hello", timeout=0.1) is False

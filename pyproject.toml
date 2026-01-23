@@ -47,6 +47,9 @@ select = ["E", "F", "I", "W"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: integration tests that exercise real system tools",
+]
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]

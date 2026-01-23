@@ -2,8 +2,12 @@
 
 import asyncio
 import logging
+import os
 import subprocess
+import shutil
 from typing import Literal
+
+from vox.client.portal_input import PortalInput
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +28,28 @@ class OutputHandler:
         """
         self.method = method
         self.typing_method = typing_method
+        self._portal_input: PortalInput | None = None
+
+    async def start(self) -> None:
+        """Start portal input once for the client lifetime."""
+        if self.method not in ("type", "both"):
+            return
+        if os.environ.get("XDG_SESSION_TYPE") != "wayland":
+            return
+        if self._portal_input and self._portal_input.active:
+            return
+        self._portal_input = PortalInput()
+        try:
+            await self._portal_input.start()
+        except Exception as exc:
+            logger.warning("Portal input unavailable: %s", exc)
+            self._portal_input = None
+
+    async def stop(self) -> None:
+        """Stop portal input session."""
+        if self._portal_input:
+            await self._portal_input.stop()
+            self._portal_input = None
 
     async def output(self, text: str) -> None:
         """Output text using configured method.
@@ -48,6 +74,10 @@ class OutputHandler:
             if self.typing_method == "paste":
                 if not did_copy:
                     await self._copy_to_clipboard(text)
+                ready = await self._wait_for_clipboard(text)
+                if not ready:
+                    await self._copy_to_clipboard(text)
+                    await self._wait_for_clipboard(text, timeout=0.5)
                 await self._paste()
             else:
                 await self._type_text(text)
@@ -58,92 +88,88 @@ class OutputHandler:
         Args:
             text: Text to copy
         """
-        process = await asyncio.create_subprocess_exec(
-            "wl-copy",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
+        await asyncio.to_thread(self._copy_to_clipboard_sync, text)
+
+    @staticmethod
+    def _copy_to_clipboard_sync(text: str) -> None:
+        process = subprocess.Popen(
+            ["wl-copy"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
         )
 
-        # Write input and close stdin so wl-copy can start serving
-        process.stdin.write(text.encode("utf-8"))
-        await process.stdin.drain()
-        process.stdin.close()
+        if process.stdin is None:
+            logger.error("wl-copy stdin unavailable")
+            return
 
         try:
-            await asyncio.wait_for(process.wait(), timeout=0.05)
-            # If we get here, it already exited (maybe error)
-            if process.returncode != 0:
-                err = (await process.stderr.read()).decode(errors="replace")
-                logger.error(f"Error copying to clipboard: {err}")
-        except asyncio.TimeoutError:
-            logger.debug(f"Copied to clipboard: {text[:50]}...")
-            pass
+            process.stdin.write(text)
+            process.stdin.close()
+        except Exception as exc:
+            logger.error("Failed writing to wl-copy stdin: %s", exc)
+            return
+
+        try:
+            process.wait(timeout=0.05)
+        except subprocess.TimeoutExpired:
+            logger.debug("Copied to clipboard: %s...", text[:50])
+            return
+
+        if process.returncode != 0:
+            err = process.stderr.read()
+            logger.error("Error copying to clipboard: %s", err)
 
     async def _paste(self) -> None:
-        """Paste from clipboard using ydotool to simulate Ctrl+V."""
+        """Paste from clipboard using portal input."""
+        if not self._portal_input or not self._portal_input.active:
+            logger.error("Portal input not available for paste.")
+            return
         try:
-            # ydotool key format: key codes separated by space
-            # 29 = KEY_LEFTCTRL, 47 = KEY_V
-            # Format: keycode:state (1=down, 0=up)
-            process = await asyncio.create_subprocess_exec(
-                "ydotool",
-                "key",
-                "29:1",  # Ctrl down
-                "47:1",  # V down
-                "47:0",  # V up
-                "29:0",  # Ctrl up
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await process.communicate()
+            await self._portal_input.send_paste()
+        except Exception as exc:
+            logger.error("Portal paste failed: %s", exc)
 
-            if process.returncode != 0:
-                error_msg = stderr.decode().strip()
-                if "ydotoold" in error_msg.lower() or "socket" in error_msg.lower():
-                    logger.error(
-                        "ydotool paste failed: ydotoold daemon not running. "
-                        "Start it with: systemctl --user enable --now ydotool"
-                    )
-                else:
-                    logger.error(f"ydotool paste failed: {error_msg}")
+    async def _wait_for_clipboard(self, text: str, timeout: float = 2.0) -> bool:
+        """Wait briefly for clipboard to match expected text."""
+        if not shutil.which("wl-paste"):
+            return True
 
-        except FileNotFoundError:
-            logger.error("ydotool not found. Install with: sudo apt install ydotool")
-        except Exception as e:
-            logger.error(f"Error pasting: {e}")
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    "wl-paste",
+                    "--no-newline",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                stdout, _stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=0.2
+                )
+                if stdout.decode("utf-8", errors="replace") == text:
+                    return True
+            except (asyncio.TimeoutError, FileNotFoundError):
+                pass
+
+            if asyncio.get_running_loop().time() >= deadline:
+                return False
+            await asyncio.sleep(0.05)
 
     async def _type_text(self, text: str) -> None:
-        """Type text directly using ydotool.
+        """Type text directly using portal input.
 
         Args:
             text: Text to type
         """
+        if not self._portal_input or not self._portal_input.active:
+            logger.error("Portal input not available for typing.")
+            return
         try:
-            process = await asyncio.create_subprocess_exec(
-                "ydotool",
-                "type",
-                "--",
-                text,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await process.communicate()
-
-            if process.returncode != 0:
-                error_msg = stderr.decode().strip()
-                if "ydotoold" in error_msg.lower() or "socket" in error_msg.lower():
-                    logger.error(
-                        "ydotool type failed: ydotoold daemon not running. "
-                        "Start it with: systemctl --user enable --now ydotool"
-                    )
-                else:
-                    logger.error(f"ydotool type failed: {error_msg}")
-
-        except FileNotFoundError:
-            logger.error("ydotool not found. Install with: sudo apt install ydotool")
-        except Exception as e:
-            logger.error(f"Error typing text: {e}")
+            await self._portal_input.type_text(text)
+        except Exception as exc:
+            logger.error("Portal type failed: %s", exc)
 
 
 def check_wayland_tools() -> dict[str, bool]:
@@ -154,7 +180,7 @@ def check_wayland_tools() -> dict[str, bool]:
     """
     tools = {}
 
-    for tool in ["wl-copy", "wl-paste", "ydotool"]:
+    for tool in ["wl-copy", "wl-paste"]:
         try:
             result = subprocess.run(
                 ["which", tool],
@@ -166,27 +192,3 @@ def check_wayland_tools() -> dict[str, bool]:
             tools[tool] = False
 
     return tools
-
-
-def check_ydotool_daemon() -> bool:
-    """Check if ydotool can work (has uinput access or daemon running).
-
-    Returns:
-        True if ydotool should work
-    """
-    import os
-
-    # Check if /dev/uinput is accessible (for ydotool v0.1.x)
-    if os.access("/dev/uinput", os.W_OK):
-        return True
-
-    # Check for ydotoold socket (for ydotool v1.x)
-    xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", "")
-    if xdg_runtime:
-        socket_path = f"{xdg_runtime}/.ydotool_socket"
-        if os.path.exists(socket_path):
-            return True
-    if os.path.exists("/tmp/.ydotool_socket"):
-        return True
-
-    return False

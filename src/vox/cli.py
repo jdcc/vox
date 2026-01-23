@@ -198,8 +198,7 @@ def config_init() -> None:
 @main.command()
 def check() -> None:
     """Check system dependencies and permissions."""
-    from vox.client.hotkey import check_input_permissions
-    from vox.client.output import check_wayland_tools, check_ydotool_daemon
+    from vox.client.output import check_wayland_tools
 
     click.echo("Checking system dependencies...")
     click.echo()
@@ -213,29 +212,7 @@ def check() -> None:
     if not all(tools.values()):
         click.echo()
         click.echo("Install missing tools with:")
-        click.echo("  sudo apt install wl-clipboard ydotool")
-
-    # Check ydotool access (uinput permissions)
-    if tools.get("ydotool"):
-        has_access = check_ydotool_daemon()
-        status = click.style("OK", fg="green") if has_access else click.style("NO ACCESS", fg="red")
-        click.echo(f"  uinput: {status}")
-        if not has_access:
-            click.echo()
-            click.echo("ydotool needs write access to /dev/uinput.")
-            click.echo("Run 'make install-deps' to set up udev rules, then log out/in.")
-
-    click.echo()
-    click.echo("Input permissions (for ydotool output):")
-    if check_input_permissions():
-        click.echo(f"  input group: {click.style('OK', fg='green')}")
-    else:
-        click.echo(f"  input group: {click.style('NOT IN GROUP', fg='red')}")
-        click.echo()
-        click.echo("ydotool needs access to /dev/uinput for paste/type output.")
-        click.echo("Add yourself to the input group with:")
-        click.echo("  sudo usermod -aG input $USER")
-        click.echo("Then log out and back in.")
+        click.echo("  sudo apt install wl-clipboard")
 
     click.echo()
     click.echo("Configuration:")

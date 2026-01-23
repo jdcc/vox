@@ -86,14 +86,7 @@ install:
 	uv sync
 
 install-deps:
-	sudo apt install -y wl-clipboard ydotool libportaudio2
-	@echo ""
-	@echo "Setting up uinput permissions for ydotool..."
-	@echo 'KERNEL=="uinput", GROUP="input", MODE="0660"' | sudo tee /etc/udev/rules.d/80-uinput.rules > /dev/null
-	sudo udevadm control --reload-rules
-	sudo udevadm trigger
-	@echo ""
-	@echo "Done! You may need to log out/in for uinput group access."
+	sudo apt install -y wl-clipboard libportaudio2
 
 # GNOME Extension commands
 install-extension:

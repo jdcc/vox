@@ -8,6 +8,7 @@
 ## Tests
 - Default: `make test` (runs `uv run pytest --cov=src/vox --cov-branch --cov-report=term-missing`).
 - Direct: `uv run pytest` (add `--cov` as needed).
+- **No task is complete until all tests pass and there's 100% coverage.**
 
 ## Style
 - Python 3.11+, source under `src/vox`.

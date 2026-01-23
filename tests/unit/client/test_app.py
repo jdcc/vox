@@ -153,7 +153,11 @@ async def test_start_success(monkeypatch) -> None:
     client = Client()
 
     monkeypatch.setattr("vox.client.app.check_extension_available", AsyncMock(return_value=True))
-    monkeypatch.setattr("vox.client.app.check_wayland_tools", lambda: {"wl-clipboard": True})
+    monkeypatch.setattr(
+        "vox.client.app.check_wayland_tools",
+        lambda: {"wl-copy": True, "wl-paste": True},
+    )
+    client.output.start = AsyncMock()
     client.overlay.start = AsyncMock()
     client.connection.start = AsyncMock()
 
@@ -176,7 +180,11 @@ async def test_start_hotkey_failure(monkeypatch) -> None:
     client = Client()
 
     monkeypatch.setattr("vox.client.app.check_extension_available", AsyncMock(return_value=False))
-    monkeypatch.setattr("vox.client.app.check_wayland_tools", lambda: {"wl-clipboard": False})
+    monkeypatch.setattr(
+        "vox.client.app.check_wayland_tools",
+        lambda: {"wl-copy": False, "wl-paste": True},
+    )
+    client.output.start = AsyncMock()
     client.overlay.start = AsyncMock()
     client.connection.start = AsyncMock()
 

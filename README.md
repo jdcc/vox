@@ -71,7 +71,8 @@ agent:
 
 - **GNOME Shell** on Wayland (extension required for hotkeys)
 - Python 3.11+
-- System packages: `wl-clipboard`, `ydotool`, `libportaudio2`
+- System packages: `wl-clipboard`, `libportaudio2`
+- `xdg-desktop-portal` with RemoteDesktop support (for persistent portal input)
 
 ## GNOME Extension
 
