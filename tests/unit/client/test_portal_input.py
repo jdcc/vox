@@ -12,6 +12,7 @@ from vox.client.portal_input import (
     KEY_LEFTSHIFT,
     KEY_V,
     DESKTOP_PATH,
+    REMOTE_DESKTOP_IFACE,
     KeyPress,
     PortalInput,
     PortalInputError,
@@ -304,3 +305,110 @@ async def test_portal_input_request_multiple_responses() -> None:
 
     assert response == 0
     assert results == {}
+
+
+@pytest.mark.asyncio
+async def test_portal_input_request_filters_messages() -> None:
+    class _HandlerBus:
+        def __init__(self, messages):
+            self._messages = messages
+            self._handlers = []
+
+        def add_message_handler(self, handler):
+            self._handlers.append(handler)
+            for message in self._messages:
+                handler(message)
+
+        def remove_message_handler(self, handler):
+            if handler in self._handlers:
+                self._handlers.remove(handler)
+
+    messages = [
+        Message(
+            message_type=MessageType.METHOD_RETURN,
+            reply_serial=1,
+            path="/request/ok",
+            interface="org.freedesktop.portal.Request",
+            member="Response",
+            body=[0, {}],
+        ),
+        Message(
+            message_type=MessageType.SIGNAL,
+            path="/request/other",
+            interface="org.freedesktop.portal.Request",
+            member="Response",
+            body=[0, {}],
+        ),
+        Message(
+            message_type=MessageType.SIGNAL,
+            path="/request/ok",
+            interface="org.freedesktop.portal.Other",
+            member="Response",
+            body=[0, {}],
+        ),
+        Message(
+            message_type=MessageType.SIGNAL,
+            path="/request/ok",
+            interface="org.freedesktop.portal.Request",
+            member="Other",
+            body=[0, {}],
+        ),
+        Message(
+            message_type=MessageType.SIGNAL,
+            path="/request/ok",
+            interface="org.freedesktop.portal.Request",
+            member="Response",
+            body=[0, {"session_handle": Variant("o", "/session/ok")}],
+        ),
+        Message(
+            message_type=MessageType.SIGNAL,
+            path="/request/ok",
+            interface="org.freedesktop.portal.Request",
+            member="Response",
+            body=[0, {"session_handle": Variant("o", "/session/ok")}],
+        ),
+    ]
+    portal = PortalInput()
+    portal._bus = _HandlerBus(messages)
+
+    response, results = await portal._request("/request/ok")
+
+    assert response == 0
+    assert results["session_handle"].value == "/session/ok"
+
+
+@pytest.mark.asyncio
+async def test_portal_input_call_without_bus() -> None:
+    portal = PortalInput()
+
+    with pytest.raises(PortalInputError):
+        await portal._call(
+            path=DESKTOP_PATH,
+            interface=REMOTE_DESKTOP_IFACE,
+            member="NotifyKeyboardKeycode",
+            signature="",
+            body=[],
+        )
+
+
+@pytest.mark.asyncio
+async def test_portal_input_call_error_response() -> None:
+    class _ErrorBus:
+        async def call(self, _message: Message) -> Message:
+            return Message(
+                message_type=MessageType.ERROR,
+                error_name="org.vox.Error",
+                reply_serial=1,
+            )
+
+    portal = PortalInput()
+    portal._bus = _ErrorBus()
+
+    with pytest.raises(PortalInputError, match="org.vox.Error"):
+        await portal._call(
+            path=DESKTOP_PATH,
+            interface=REMOTE_DESKTOP_IFACE,
+            member="NotifyKeyboardKeycode",
+            signature="",
+            body=[],
+        )

@@ -492,6 +492,35 @@ async def test_wait_for_clipboard_timeout(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_wait_for_clipboard_sleeps_before_timeout(monkeypatch) -> None:
+    handler = OutputHandler()
+
+    class _PasteProcess:
+        async def communicate(self):
+            return (b"nope", b"")
+
+    async def create_proc(*_args, **_kwargs):
+        return _PasteProcess()
+
+    class _FakeLoop:
+        def __init__(self):
+            self._times = iter([0.0, 0.02, 0.2])
+
+        def time(self) -> float:
+            return next(self._times)
+
+    loop = _FakeLoop()
+    sleep_mock = AsyncMock()
+    monkeypatch.setattr(output_module.shutil, "which", lambda _name: "/usr/bin/wl-paste")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_proc)
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: loop)
+    monkeypatch.setattr(asyncio, "sleep", sleep_mock)
+
+    assert await handler._wait_for_clipboard("hello", timeout=0.1) is False
+    sleep_mock.assert_awaited()
+
+
+@pytest.mark.asyncio
 async def test_wait_for_clipboard_missing_paste(monkeypatch) -> None:
     handler = OutputHandler()
 
