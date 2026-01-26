@@ -1,6 +1,6 @@
 # Vox
 
-Lightweight speech-to-text with LLM agent integration.
+Lightweight speech-to-text with LLM agent integration. Only works on Gnome+Mutter, Wayland.
 
 ## Features
 
