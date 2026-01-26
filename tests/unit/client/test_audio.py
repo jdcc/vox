@@ -128,6 +128,65 @@ def test_audio_callback_logs_status() -> None:
     recorder._audio_callback(data, 5, {}, 1)
 
 
+def test_calculate_level_clamps_to_one() -> None:
+    recorder = AudioRecorder()
+    data = np.full((10, 1), 32767, dtype=np.int16)
+
+    level = recorder._calculate_level(data)
+
+    assert level == 1.0
+
+
+def test_audio_callback_reports_level(monkeypatch) -> None:
+    levels = []
+
+    def on_level(level: float) -> None:
+        levels.append(level)
+
+    recorder = AudioRecorder(on_level=on_level)
+    recorder.is_recording = True
+    recorder._last_level_time = 0.0
+    recorder._level_interval = 0.1
+    monkeypatch.setattr(audio_module.time, "monotonic", lambda: 1.0)
+
+    data = np.zeros((5, 1), dtype=np.int16)
+    recorder._audio_callback(data, 5, {}, 0)
+
+    assert len(levels) == 1
+
+
+def test_audio_callback_level_handler_error(monkeypatch) -> None:
+    def on_level(_level: float) -> None:
+        raise RuntimeError("boom")
+
+    recorder = AudioRecorder(on_level=on_level)
+    recorder.is_recording = True
+    recorder._last_level_time = 0.0
+    recorder._level_interval = 0.1
+    monkeypatch.setattr(audio_module.time, "monotonic", lambda: 1.0)
+
+    data = np.zeros((5, 1), dtype=np.int16)
+    recorder._audio_callback(data, 5, {}, 0)
+
+
+def test_audio_callback_skips_level_when_throttled(monkeypatch) -> None:
+    levels = []
+
+    def on_level(level: float) -> None:
+        levels.append(level)
+
+    recorder = AudioRecorder(on_level=on_level)
+    recorder.is_recording = True
+    recorder._last_level_time = 0.95
+    recorder._level_interval = 0.1
+    monkeypatch.setattr(audio_module.time, "monotonic", lambda: 1.0)
+
+    data = np.zeros((5, 1), dtype=np.int16)
+    recorder._audio_callback(data, 5, {}, 0)
+
+    assert levels == []
+
+
 def test_close_stops_stream(mock_sounddevice) -> None:
     recorder = AudioRecorder()
     stream = audio_module.sd.InputStream.return_value

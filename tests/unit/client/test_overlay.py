@@ -88,6 +88,42 @@ async def test_overlay_set_state_async_error(monkeypatch) -> None:
     assert overlay._interface is None
 
 
+@pytest.mark.asyncio
+async def test_overlay_set_audio_level_async(monkeypatch) -> None:
+    overlay = Overlay()
+    interface = MagicMock()
+    interface.call_set_audio_level = AsyncMock()
+    overlay._interface = interface
+    overlay._enabled = True
+
+    await overlay._set_audio_level_async(0.5)
+
+    interface.call_set_audio_level.assert_awaited_once_with(0.5)
+
+
+@pytest.mark.asyncio
+async def test_overlay_set_audio_level_async_error(monkeypatch) -> None:
+    overlay = Overlay()
+    interface = MagicMock()
+    interface.call_set_audio_level = AsyncMock(side_effect=DBusError("org.test", "fail"))
+    overlay._interface = interface
+    overlay._enabled = True
+    overlay._available = True
+
+    await overlay._set_audio_level_async(0.5)
+
+    assert overlay.available is False
+    assert overlay._interface is None
+
+
+@pytest.mark.asyncio
+async def test_overlay_set_audio_level_async_disabled() -> None:
+    overlay = Overlay(enabled=False)
+    overlay._interface = MagicMock()
+
+    await overlay._set_audio_level_async(0.5)
+
+
 def test_overlay_set_state_no_interface() -> None:
     overlay = Overlay()
     overlay.set_state(OverlayState.RECORDING)
@@ -109,6 +145,35 @@ def test_overlay_set_state_runs_in_loop(monkeypatch) -> None:
     monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", run_stub)
 
     overlay.set_state(OverlayState.SUCCESS)
+
+    assert called is True
+
+
+def test_overlay_set_audio_level_no_loop() -> None:
+    overlay = Overlay()
+    overlay._enabled = True
+    overlay._interface = MagicMock()
+    overlay._loop = None
+
+    overlay.set_audio_level(0.2)
+
+
+def test_overlay_set_audio_level_runs_in_loop(monkeypatch) -> None:
+    overlay = Overlay()
+    overlay._enabled = True
+    overlay._interface = MagicMock()
+    overlay._loop = asyncio.get_event_loop()
+
+    called = False
+
+    def run_stub(_coro, _loop):
+        _coro.close()
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", run_stub)
+
+    overlay.set_audio_level(0.3)
 
     assert called is True
 

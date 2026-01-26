@@ -20,6 +20,9 @@ const DBUS_INTERFACE = `
     <method name="SetState">
       <arg type="s" name="state" direction="in"/>
     </method>
+    <method name="SetAudioLevel">
+      <arg type="d" name="level" direction="in"/>
+    </method>
     <method name="GetState">
       <arg type="s" name="state" direction="out"/>
     </method>
@@ -49,6 +52,9 @@ class VoxIndicator {
         this._time = 0;
         this._transitionProgress = 1;
         this._transitionDuration = 0.5;
+        this._audioLevel = 0;
+        this._smoothedAudioLevel = 0;
+        this._audioSmoothing = 0.15;
 
         // Animation parameters (from HTML reference)
         this._animationSpeed = 0.8;
@@ -140,6 +146,10 @@ class VoxIndicator {
         this._startAnimationLoop();
     }
 
+    setAudioLevel(level) {
+        this._audioLevel = Math.max(0, Math.min(level, 1));
+    }
+
     _startAnimationLoop() {
         if (this._animationTimeout) return;
 
@@ -152,6 +162,11 @@ class VoxIndicator {
 
             // Update time
             this._time += timeIncrement;
+            if (this._state !== 'recording') {
+                this._audioLevel = 0;
+            }
+            this._smoothedAudioLevel = this._audioSmoothing * this._audioLevel +
+                (1 - this._audioSmoothing) * this._smoothedAudioLevel;
 
             // Update transition progress
             if (this._transitionProgress < 1) {
@@ -231,12 +246,14 @@ class VoxIndicator {
 
     _drawRecording(cr, cx, cy, alpha) {
         const color = STATE_COLORS.recording;
+        const audioLevel = this._smoothedAudioLevel;
 
         // 5 converging wave rings moving inward
         for (let i = 0; i < this._ringCount; i++) {
             const t = (this._time * this._animationSpeed * 5 + i * this._ringSpacing) % (Math.PI * 2);
             const radius = (50 - t * 7.96) * this._scale;
-            const opacity = (t / (Math.PI * 2)) * 0.4 * this._opacityMultiplier * alpha;
+            const baseOpacity = (t / (Math.PI * 2)) * 0.4 * this._opacityMultiplier * alpha;
+            const opacity = baseOpacity * (1 + audioLevel * 4);
 
             if (radius > 0) {
                 cr.setSourceRGBA(color.r, color.g, color.b, opacity);
@@ -246,10 +263,9 @@ class VoxIndicator {
             }
         }
 
-        // Pulsing center dot
-        const pulse = (Math.sin(this._time * 3 * this._animationSpeed * 2.5) + 1) / 2;
-        const centerRadius = (this._centerSize + pulse * 2) * this._scale;
-        const centerOpacity = (0.7 + pulse * 0.3) * this._opacityMultiplier * alpha;
+        // Static center dot
+        const centerRadius = this._centerSize * this._scale;
+        const centerOpacity = 0.6 * this._opacityMultiplier * alpha;
 
         cr.setSourceRGBA(color.r, color.g, color.b, centerOpacity);
         cr.arc(cx, cy, centerRadius, 0, Math.PI * 2);
@@ -503,6 +519,10 @@ class VoxDBusService {
                         if (method === 'SetState') {
                             const [state] = params.deep_unpack();
                             this._indicator.setState(state);
+                            invocation.return_value(null);
+                        } else if (method === 'SetAudioLevel') {
+                            const [level] = params.deep_unpack();
+                            this._indicator.setAudioLevel(level);
                             invocation.return_value(null);
                         } else if (method === 'GetState') {
                             const state = this._indicator.getState();

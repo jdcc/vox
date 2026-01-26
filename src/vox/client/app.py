@@ -25,7 +25,7 @@ class Client:
         """
         self.config = config or load_config()
 
-        self.audio = AudioRecorder()
+        self.audio = AudioRecorder(on_level=self._on_audio_level)
         self.output = OutputHandler(
             method=self.config.output.method,
             typing_method=self.config.output.typing_method,
@@ -46,6 +46,7 @@ class Client:
         self._is_recording = False
         self._pending_output: str | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._last_overlay_level = 0.0
 
     def _on_connection_state_change(self, state: ConnectionState) -> None:
         """Handle connection state changes.
@@ -87,12 +88,14 @@ class Client:
             await self.output.output(text)
         await asyncio.sleep(1)
         self.overlay.hide()
+        self._set_overlay_level(0.0)
 
     def _on_hotkey_press(self) -> None:
         """Handle hotkey press (start recording)."""
         if not self._is_recording and self.connection.is_connected:
             self._is_recording = True
             self.overlay.recording()
+            self._set_overlay_level(0.0)
             self.audio.start_recording()
             logger.info("Recording started")
 
@@ -101,6 +104,7 @@ class Client:
         if self._is_recording:
             self._is_recording = False
             self.overlay.processing()
+            self._set_overlay_level(0.0)
             audio_bytes = self.audio.stop_recording()
             logger.info(f"Recording stopped, {len(audio_bytes)} bytes")
 
@@ -113,6 +117,16 @@ class Client:
                     ),
                     self._loop,
                 )
+
+    def _set_overlay_level(self, level: float) -> None:
+        if level == self._last_overlay_level:
+            return
+        self._last_overlay_level = level
+        self.overlay.set_audio_level(level)
+
+    def _on_audio_level(self, level: float) -> None:
+        if self._is_recording:
+            self._set_overlay_level(level)
 
     async def start(self) -> None:
         """Start the client."""

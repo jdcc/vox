@@ -76,6 +76,28 @@ def test_on_hotkey_release_not_recording() -> None:
     client.audio.stop_recording.assert_not_called()
 
 
+def test_set_overlay_level_dedupes() -> None:
+    client = Client()
+    client.overlay.set_audio_level = MagicMock()
+
+    client._set_overlay_level(0.4)
+    client._set_overlay_level(0.4)
+
+    client.overlay.set_audio_level.assert_called_once_with(0.4)
+
+
+def test_on_audio_level_only_when_recording() -> None:
+    client = Client()
+    client.overlay.set_audio_level = MagicMock()
+
+    client._is_recording = False
+    client._on_audio_level(0.2)
+    client._is_recording = True
+    client._on_audio_level(0.2)
+
+    client.overlay.set_audio_level.assert_called_once_with(0.2)
+
+
 def test_on_transcription_processing() -> None:
     client = Client()
     response = TranscriptionResponse(text="partial", processing=True)

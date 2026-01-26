@@ -3,6 +3,7 @@
 import logging
 import queue
 import threading
+import time
 from typing import Callable
 
 import numpy as np
@@ -19,11 +20,16 @@ BLOCK_SIZE = 1024
 class AudioRecorder:
     """Records audio from the microphone."""
 
-    def __init__(self, sample_rate: int = SAMPLE_RATE) -> None:
+    def __init__(
+        self,
+        sample_rate: int = SAMPLE_RATE,
+        on_level: Callable[[float], None] | None = None,
+    ) -> None:
         """Initialize the audio recorder.
 
         Args:
             sample_rate: Sample rate for recording (default 16kHz for Whisper)
+            on_level: Optional callback for audio level updates
         """
         self.sample_rate = sample_rate
         self.channels = CHANNELS
@@ -31,6 +37,14 @@ class AudioRecorder:
         self._audio_queue: queue.Queue[np.ndarray] = queue.Queue()
         self._stream: sd.InputStream | None = None
         self._lock = threading.Lock()
+        self._on_level = on_level
+        self._last_level_time = 0.0
+        self._level_interval = 1 / 30
+
+    def _calculate_level(self, indata: np.ndarray) -> float:
+        samples = indata.astype(np.float32) / 32768.0
+        rms = float(np.sqrt(np.mean(np.square(samples))))
+        return float(min(rms * 5.0, 1.0))
 
     def _audio_callback(
         self,
@@ -52,6 +66,14 @@ class AudioRecorder:
 
         if self.is_recording:
             self._audio_queue.put(indata.copy())
+            if self._on_level:
+                now = time.monotonic()
+                if now - self._last_level_time >= self._level_interval:
+                    self._last_level_time = now
+                    try:
+                        self._on_level(self._calculate_level(indata))
+                    except Exception as exc:
+                        logger.debug(f"Audio level callback failed: {exc}")
 
     def start_recording(self) -> None:
         """Start recording audio."""

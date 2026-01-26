@@ -122,6 +122,22 @@ class Overlay:
             self._available = False
             self._interface = None
 
+    async def _set_audio_level_async(self, level: float) -> None:
+        """Set the overlay audio level asynchronously.
+
+        Args:
+            level: Audio level in the range [0, 1]
+        """
+        if not self._enabled or self._interface is None:
+            return
+
+        try:
+            await self._interface.call_set_audio_level(float(level))
+        except DBusError as e:
+            logger.debug(f"Failed to set overlay audio level: {e}")
+            self._available = False
+            self._interface = None
+
     def set_state(self, state: OverlayState) -> None:
         """Set the overlay state.
 
@@ -133,6 +149,17 @@ class Overlay:
 
         if self._loop is not None:
             asyncio.run_coroutine_threadsafe(self._set_state_async(state), self._loop)
+
+    def set_audio_level(self, level: float) -> None:
+        """Set the overlay audio level.
+
+        Args:
+            level: Audio level in the range [0, 1]
+        """
+        if not self._enabled or self._interface is None or self._loop is None:
+            return
+
+        asyncio.run_coroutine_threadsafe(self._set_audio_level_async(level), self._loop)
 
     def recording(self) -> None:
         """Show recording indicator."""
