@@ -5,7 +5,7 @@ Lightweight speech-to-text with LLM agent integration.
 ## Features
 
 - **Fast transcription** using faster-whisper (CTranslate2-optimized)
-- **Hold-to-record** with global hotkeys via GNOME Shell extension
+- **Global hotkey** with press-to-toggle recording via GNOME Shell extension
 - **LLM agent integration** for text transformation and generation
 - **Client-server architecture** for remote GPU support
 - **Visual indicator** overlay for recording/processing states
@@ -27,8 +27,8 @@ make start
 
 ## Usage
 
-1. Hold `Ctrl+Space` to record
-2. Release to transcribe
+1. Press `Ctrl+Space` to start recording
+2. Press `Ctrl+Space` again to stop and transcribe
 3. Text is copied to clipboard and pasted
 
 ### Agent Commands
@@ -77,7 +77,7 @@ agent:
 ## GNOME Extension
 
 The Vox GNOME Shell extension provides:
-- Global hotkey detection with press-and-hold semantics
+- Global hotkey detection with toggle semantics
 - Visual indicator overlay (recording/processing/success/failure)
 - D-Bus communication with the Python client
 
