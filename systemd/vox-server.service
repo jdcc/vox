@@ -1,0 +1,13 @@
+[Unit]
+Description=Vox Speech-to-Text Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/tools/vox
+ExecStart=/usr/bin/env uv run vox server
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

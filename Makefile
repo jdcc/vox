@@ -1,4 +1,4 @@
-.PHONY: build run stop logs client server tui check test install clean setup setup-full start start-bg install-extension uninstall-extension
+.PHONY: build run stop logs client server tui check test install clean setup setup-full start start-bg install-extension uninstall-extension install-services uninstall-services
 
 # =============================================================================
 # Quick Start (from clean machine)
@@ -116,6 +116,34 @@ uninstall-extension:
 	@rm -rf ~/.local/share/gnome-shell/extensions/vox@local
 	@echo "Extension uninstalled."
 
+# Systemd user service commands
+install-services:
+	@echo "Installing Vox systemd user services..."
+	@mkdir -p ~/.config/systemd/user
+	@cp systemd/vox-server.service ~/.config/systemd/user/
+	@cp systemd/vox-client.service ~/.config/systemd/user/
+	@systemctl --user daemon-reload
+	@systemctl --user enable vox-server.service vox-client.service
+	@echo ""
+	@echo "Services installed and enabled."
+	@echo "They will start automatically on login."
+	@echo ""
+	@echo "To start now:"
+	@echo "  systemctl --user start vox-server vox-client"
+	@echo ""
+	@echo "To check status:"
+	@echo "  systemctl --user status vox-server vox-client"
+	@echo ""
+
+uninstall-services:
+	@echo "Uninstalling Vox systemd user services..."
+	@systemctl --user stop vox-server.service vox-client.service 2>/dev/null || true
+	@systemctl --user disable vox-server.service vox-client.service 2>/dev/null || true
+	@rm -f ~/.config/systemd/user/vox-server.service
+	@rm -f ~/.config/systemd/user/vox-client.service
+	@systemctl --user daemon-reload
+	@echo "Services uninstalled."
+
 # Model commands
 models-list:
 	uv run vox models list
@@ -179,3 +207,7 @@ help:
 	@echo "GNOME Extension:"
 	@echo "  make install-extension   - Install the GNOME Shell extension"
 	@echo "  make uninstall-extension - Remove the GNOME Shell extension"
+	@echo ""
+	@echo "Systemd Services (autostart):"
+	@echo "  make install-services    - Install and enable user services"
+	@echo "  make uninstall-services  - Stop, disable, and remove services"

@@ -1,0 +1,15 @@
+[Unit]
+Description=Vox Speech-to-Text Client
+After=graphical-session.target vox-server.service
+Requires=vox-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/tools/vox
+ExecStartPre=/bin/sleep 10
+ExecStart=/usr/bin/env uv run vox client
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
