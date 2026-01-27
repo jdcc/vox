@@ -3,7 +3,7 @@
   "name": "Vox Speech-to-Text",
   "description": "Global hotkey and visual indicator for Vox speech-to-text",
   "version": 1,
-  "shell-version": ["45", "46", "47"],
+  "shell-version": ["45", "46", "47", "48", "49"],
   "settings-schema": "org.gnome.shell.extensions.vox",
   "url": "https://github.com/your-repo/vox"
 }
