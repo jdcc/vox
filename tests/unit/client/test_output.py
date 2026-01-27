@@ -57,18 +57,27 @@ class _FakePortalInput:
         self.stopped = False
         self.raise_on_paste = False
         self.raise_on_type = False
+        self.raise_on_start = False
+        self.paste_call_count = 0
+        self.type_call_count = 0
+        self.fail_paste_until_call = 0
+        self.fail_type_until_call = 0
 
     async def send_paste(self) -> None:
-        if self.raise_on_paste:
+        self.paste_call_count += 1
+        if self.raise_on_paste or self.paste_call_count <= self.fail_paste_until_call:
             raise RuntimeError("paste failed")
         self.paste_called = True
 
     async def type_text(self, _text: str) -> None:
-        if self.raise_on_type:
+        self.type_call_count += 1
+        if self.raise_on_type or self.type_call_count <= self.fail_type_until_call:
             raise RuntimeError("type failed")
         self.type_called = True
 
     async def start(self) -> None:
+        if self.raise_on_start:
+            raise RuntimeError("start failed")
         self.started = True
 
     async def stop(self) -> None:
@@ -258,6 +267,77 @@ async def test_stop_portal(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_reinitialize_portal_success(monkeypatch) -> None:
+    handler = OutputHandler()
+    old_portal = _FakePortalInput()
+    handler._portal_input = old_portal
+
+    new_portal = _FakePortalInput()
+    monkeypatch.setattr(output_module, "PortalInput", lambda: new_portal)
+
+    result = await handler._reinitialize_portal()
+
+    assert result is True
+    assert old_portal.stopped is True
+    assert new_portal.started is True
+    assert handler._portal_input is new_portal
+
+
+@pytest.mark.asyncio
+async def test_reinitialize_portal_failure(monkeypatch) -> None:
+    handler = OutputHandler()
+    old_portal = _FakePortalInput()
+    handler._portal_input = old_portal
+
+    new_portal = _FakePortalInput()
+    new_portal.raise_on_start = True
+    monkeypatch.setattr(output_module, "PortalInput", lambda: new_portal)
+
+    result = await handler._reinitialize_portal()
+
+    assert result is False
+    assert old_portal.stopped is True
+    assert handler._portal_input is None
+
+
+@pytest.mark.asyncio
+async def test_reinitialize_portal_stop_error(monkeypatch) -> None:
+    handler = OutputHandler()
+
+    class _FailStopPortal:
+        active = True
+
+        async def stop(self) -> None:
+            raise RuntimeError("stop failed")
+
+    handler._portal_input = _FailStopPortal()
+
+    new_portal = _FakePortalInput()
+    monkeypatch.setattr(output_module, "PortalInput", lambda: new_portal)
+
+    result = await handler._reinitialize_portal()
+
+    assert result is True
+    assert new_portal.started is True
+    assert handler._portal_input is new_portal
+
+
+@pytest.mark.asyncio
+async def test_reinitialize_portal_no_existing(monkeypatch) -> None:
+    handler = OutputHandler()
+    assert handler._portal_input is None
+
+    new_portal = _FakePortalInput()
+    monkeypatch.setattr(output_module, "PortalInput", lambda: new_portal)
+
+    result = await handler._reinitialize_portal()
+
+    assert result is True
+    assert new_portal.started is True
+    assert handler._portal_input is new_portal
+
+
+@pytest.mark.asyncio
 async def test_copy_to_clipboard_success(monkeypatch) -> None:
     handler = OutputHandler()
     process = _FakeProcess(returncode=0)
@@ -318,13 +398,54 @@ async def test_paste_portal() -> None:
 
 
 @pytest.mark.asyncio
-async def test_paste_portal_error() -> None:
+async def test_paste_portal_error_reinit_succeeds(monkeypatch) -> None:
+    handler = OutputHandler()
+    portal = _FakePortalInput()
+    portal.fail_paste_until_call = 1  # Fail first call, succeed on retry
+    handler._portal_input = portal
+
+    new_portal = _FakePortalInput()
+    monkeypatch.setattr(output_module, "PortalInput", lambda: new_portal)
+
+    await handler._paste()
+
+    assert portal.stopped is True
+    assert new_portal.started is True
+    assert new_portal.paste_called is True
+
+
+@pytest.mark.asyncio
+async def test_paste_portal_error_reinit_fails(monkeypatch) -> None:
     handler = OutputHandler()
     portal = _FakePortalInput()
     portal.raise_on_paste = True
     handler._portal_input = portal
 
+    new_portal = _FakePortalInput()
+    new_portal.raise_on_start = True
+    monkeypatch.setattr(output_module, "PortalInput", lambda: new_portal)
+
     await handler._paste()
+
+    assert portal.stopped is True
+    assert handler._portal_input is None
+
+
+@pytest.mark.asyncio
+async def test_paste_portal_error_still_fails_after_reinit(monkeypatch) -> None:
+    handler = OutputHandler()
+    portal = _FakePortalInput()
+    portal.raise_on_paste = True
+    handler._portal_input = portal
+
+    new_portal = _FakePortalInput()
+    new_portal.raise_on_paste = True
+    monkeypatch.setattr(output_module, "PortalInput", lambda: new_portal)
+
+    await handler._paste()
+
+    assert new_portal.started is True
+    assert new_portal.paste_call_count == 1
 
 
 @pytest.mark.asyncio
@@ -345,13 +466,54 @@ async def test_type_text_portal() -> None:
 
 
 @pytest.mark.asyncio
-async def test_type_text_portal_error() -> None:
+async def test_type_text_portal_error_reinit_succeeds(monkeypatch) -> None:
+    handler = OutputHandler()
+    portal = _FakePortalInput()
+    portal.fail_type_until_call = 1  # Fail first call, succeed on retry
+    handler._portal_input = portal
+
+    new_portal = _FakePortalInput()
+    monkeypatch.setattr(output_module, "PortalInput", lambda: new_portal)
+
+    await handler._type_text("hello")
+
+    assert portal.stopped is True
+    assert new_portal.started is True
+    assert new_portal.type_called is True
+
+
+@pytest.mark.asyncio
+async def test_type_text_portal_error_reinit_fails(monkeypatch) -> None:
     handler = OutputHandler()
     portal = _FakePortalInput()
     portal.raise_on_type = True
     handler._portal_input = portal
 
+    new_portal = _FakePortalInput()
+    new_portal.raise_on_start = True
+    monkeypatch.setattr(output_module, "PortalInput", lambda: new_portal)
+
     await handler._type_text("hello")
+
+    assert portal.stopped is True
+    assert handler._portal_input is None
+
+
+@pytest.mark.asyncio
+async def test_type_text_portal_error_still_fails_after_reinit(monkeypatch) -> None:
+    handler = OutputHandler()
+    portal = _FakePortalInput()
+    portal.raise_on_type = True
+    handler._portal_input = portal
+
+    new_portal = _FakePortalInput()
+    new_portal.raise_on_type = True
+    monkeypatch.setattr(output_module, "PortalInput", lambda: new_portal)
+
+    await handler._type_text("hello")
+
+    assert new_portal.started is True
+    assert new_portal.type_call_count == 1
 
 
 def test_check_wayland_tools(monkeypatch) -> None:

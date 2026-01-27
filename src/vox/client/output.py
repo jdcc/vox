@@ -7,7 +7,7 @@ import subprocess
 import shutil
 from typing import Literal
 
-from vox.client.portal_input import PortalInput
+from vox.client.portal_input import PortalInput, PortalInputError
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,30 @@ class OutputHandler:
         if self._portal_input:
             await self._portal_input.stop()
             self._portal_input = None
+
+    async def _reinitialize_portal(self) -> bool:
+        """Reinitialize the portal session after an error.
+
+        Returns:
+            True if reinitialization succeeded, False otherwise.
+        """
+        logger.info("Reinitializing portal session...")
+        if self._portal_input:
+            try:
+                await self._portal_input.stop()
+            except Exception as exc:
+                logger.debug("Error stopping portal during reinit: %s", exc)
+            self._portal_input = None
+
+        self._portal_input = PortalInput()
+        try:
+            await self._portal_input.start()
+            logger.info("Portal session reinitialized successfully")
+            return True
+        except Exception as exc:
+            logger.warning("Portal reinitialization failed: %s", exc)
+            self._portal_input = None
+            return False
 
     async def output(self, text: str) -> None:
         """Output text using configured method.
@@ -128,8 +152,15 @@ class OutputHandler:
             return
         try:
             await self._portal_input.send_paste()
-        except Exception as exc:
-            logger.error("Portal paste failed: %s", exc)
+        except (PortalInputError, Exception) as exc:
+            logger.warning("Portal paste failed, attempting reinit: %s", exc)
+            if await self._reinitialize_portal():
+                try:
+                    await self._portal_input.send_paste()
+                except Exception as retry_exc:
+                    logger.error("Portal paste failed after reinit: %s", retry_exc)
+            else:
+                logger.error("Portal paste failed and reinit unsuccessful")
 
     async def _wait_for_clipboard(self, text: str, timeout: float = 2.0) -> bool:
         """Wait briefly for clipboard to match expected text."""
@@ -168,8 +199,15 @@ class OutputHandler:
             return
         try:
             await self._portal_input.type_text(text)
-        except Exception as exc:
-            logger.error("Portal type failed: %s", exc)
+        except (PortalInputError, Exception) as exc:
+            logger.warning("Portal type failed, attempting reinit: %s", exc)
+            if await self._reinitialize_portal():
+                try:
+                    await self._portal_input.type_text(text)
+                except Exception as retry_exc:
+                    logger.error("Portal type failed after reinit: %s", retry_exc)
+            else:
+                logger.error("Portal type failed and reinit unsuccessful")
 
 
 def check_wayland_tools() -> dict[str, bool]:
