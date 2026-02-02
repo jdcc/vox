@@ -128,13 +128,14 @@ def test_audio_callback_logs_status() -> None:
     recorder._audio_callback(data, 5, {}, 1)
 
 
-def test_calculate_level_clamps_to_one() -> None:
+def test_calculate_level_returns_raw_rms() -> None:
     recorder = AudioRecorder()
     data = np.full((10, 1), 32767, dtype=np.int16)
 
     level = recorder._calculate_level(data)
 
-    assert level == 1.0
+    # Raw RMS at max amplitude (32767/32768) is ~1.0
+    assert 0.99 < level <= 1.0
 
 
 def test_audio_callback_reports_level(monkeypatch) -> None:

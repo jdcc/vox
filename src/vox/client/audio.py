@@ -44,7 +44,7 @@ class AudioRecorder:
     def _calculate_level(self, indata: np.ndarray) -> float:
         samples = indata.astype(np.float32) / 32768.0
         rms = float(np.sqrt(np.mean(np.square(samples))))
-        return float(min(rms * 5.0, 1.0))
+        return rms  # Return raw RMS, let consumer handle scaling
 
     def _audio_callback(
         self,

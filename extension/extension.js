@@ -246,14 +246,12 @@ class VoxIndicator {
 
     _drawRecording(cr, cx, cy, alpha) {
         const color = STATE_COLORS.recording;
-        const audioLevel = this._smoothedAudioLevel;
 
-        // 5 converging wave rings moving inward
+        // 5 converging wave rings moving inward (time-based animation, no audio reactivity)
         for (let i = 0; i < this._ringCount; i++) {
             const t = (this._time * this._animationSpeed * 5 + i * this._ringSpacing) % (Math.PI * 2);
             const radius = (50 - t * 7.96) * this._scale;
-            const baseOpacity = (t / (Math.PI * 2)) * 0.4 * this._opacityMultiplier * alpha;
-            const opacity = baseOpacity * (1 + audioLevel * 4);
+            const opacity = (t / (Math.PI * 2)) * 0.4 * this._opacityMultiplier * alpha;
 
             if (radius > 0) {
                 cr.setSourceRGBA(color.r, color.g, color.b, opacity);
@@ -263,8 +261,11 @@ class VoxIndicator {
             }
         }
 
-        // Static center dot
-        const centerRadius = this._centerSize * this._scale;
+        // Audio-reactive center dot - uses raw RMS for maximum responsiveness
+        // Raw RMS typically ranges from ~0.0 (silence) to ~1.0 (very loud)
+        const baseRadius = this._centerSize * this._scale;
+        const audioBoost = this._audioLevel * 15;  // 15px max growth at full amplitude
+        const centerRadius = baseRadius + audioBoost;
         const centerOpacity = 0.6 * this._opacityMultiplier * alpha;
 
         cr.setSourceRGBA(color.r, color.g, color.b, centerOpacity);
