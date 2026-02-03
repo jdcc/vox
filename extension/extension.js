@@ -66,6 +66,12 @@ class VoxIndicator {
 
         // Scale factor (100px widget / 300px source)
         this._scale = 1.5;
+
+        // Session-based adaptive audio tracking
+        this._sessionMin = null;    // Noise floor (lowest level seen)
+        this._sessionMax = 0;       // Peak level seen this session
+        this._sessionSampleCount = 0;    // Samples collected this session
+        this._peakDecay = 0.995;         // Peak decays ~0.5% per frame
     }
 
     create() {
@@ -137,6 +143,13 @@ class VoxIndicator {
             return;
         }
 
+        // Reset adaptive audio tracking when entering recording state
+        if (state === 'recording' && this._state !== 'recording') {
+            this._sessionMin = null;
+            this._sessionMax = 0;
+            this._sessionSampleCount = 0;
+        }
+
         // Store previous state for crossfade
         this._prevState = this._state;
         this._state = state;
@@ -148,6 +161,50 @@ class VoxIndicator {
 
     setAudioLevel(level) {
         this._audioLevel = Math.max(0, Math.min(level, 1));
+
+        if (this._state === 'recording') {
+            this._sessionSampleCount++;
+
+            if (this._sessionMin === null) {
+                this._sessionMin = this._audioLevel;
+                this._sessionMax = this._audioLevel;
+            } else {
+                // Min tracks noise floor (only goes down)
+                if (this._audioLevel < this._sessionMin) {
+                    this._sessionMin = this._audioLevel;
+                }
+                // Max: fast attack (instant peak), slow decay
+                if (this._audioLevel > this._sessionMax) {
+                    this._sessionMax = this._audioLevel;
+                } else {
+                    // Decay max slowly so it can adjust down over time
+                    this._sessionMax = this._sessionMax * this._peakDecay;
+                    // Don't let max fall below current level
+                    this._sessionMax = Math.max(this._sessionMax, this._audioLevel);
+                }
+            }
+        }
+    }
+
+    _getNormalizedAudioLevel() {
+        const WARMUP_SAMPLES = 30;  // ~0.5s at 60fps
+
+        // During warmup, use aggressive fixed scaling
+        if (this._sessionSampleCount < WARMUP_SAMPLES) {
+            // Use sqrt to boost quiet sounds, then scale up
+            return Math.min(Math.sqrt(this._audioLevel) * 2, 1);
+        }
+
+        const range = this._sessionMax - this._sessionMin;
+        // If range is still too small, use aggressive scaling
+        if (range < 0.01) {
+            return Math.min(Math.sqrt(this._audioLevel) * 2, 1);
+        }
+
+        // Normalize to 0-1 based on session's dynamic range
+        const normalized = (this._audioLevel - this._sessionMin) / range;
+        // Apply sqrt curve to boost quieter sounds in the normalized range
+        return Math.max(0, Math.min(Math.sqrt(normalized), 1));
     }
 
     _startAnimationLoop() {
@@ -261,12 +318,14 @@ class VoxIndicator {
             }
         }
 
-        // Audio-reactive center dot - uses raw RMS for maximum responsiveness
-        // Raw RMS typically ranges from ~0.0 (silence) to ~1.0 (very loud)
+        // Audio-reactive center dot - uses session-normalized level
+        const normalizedLevel = this._getNormalizedAudioLevel();
         const baseRadius = this._centerSize * this._scale;
-        const audioBoost = this._audioLevel * 15;  // 15px max growth at full amplitude
+        const audioBoost = normalizedLevel * 20;  // Full range: 0-20px growth
         const centerRadius = baseRadius + audioBoost;
-        const centerOpacity = 0.6 * this._opacityMultiplier * alpha;
+        const baseOpacity = 0.4;
+        const opacityBoost = normalizedLevel * 0.5;
+        const centerOpacity = (baseOpacity + opacityBoost) * this._opacityMultiplier * alpha;
 
         cr.setSourceRGBA(color.r, color.g, color.b, centerOpacity);
         cr.arc(cx, cy, centerRadius, 0, Math.PI * 2);
