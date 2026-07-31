@@ -13,6 +13,13 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as Config from 'resource:///org/gnome/shell/misc/config.js';
+
+// GNOME Shell 50 dropped the X11 backend, and with it the `affectsInputRegion`
+// option on LayoutManager.addChrome(). Its params are validated strictly, so
+// passing the key on 50+ throws `Unrecognized parameter "affectsInputRegion"`.
+// On 50+ the actor's own `reactive: false` is what keeps it click-through.
+const SHELL_MAJOR = Number.parseInt(Config.PACKAGE_VERSION.split('.')[0], 10);
 
 const DBUS_INTERFACE = `
 <node>
@@ -74,10 +81,11 @@ class VoxIndicator {
         // Position in top-right corner
         this._updatePosition();
 
-        Main.layoutManager.addChrome(this._widget, {
-            affectsInputRegion: false,
-            trackFullscreen: true,
-        });
+        const chromeParams = { trackFullscreen: true };
+        if (SHELL_MAJOR < 50)
+            chromeParams.affectsInputRegion = false;
+
+        Main.layoutManager.addChrome(this._widget, chromeParams);
 
         // Update position when monitors change
         this._monitorsChangedId = Main.layoutManager.connect(
