@@ -29,6 +29,12 @@ class ModelConfig(BaseModel):
     compute_type: str = "int8"
 
 
+class AudioConfig(BaseModel):
+    """Audio input configuration."""
+
+    input_device: str | None = None
+
+
 class OutputConfig(BaseModel):
     """Output configuration."""
 
@@ -72,6 +78,7 @@ class Config(BaseModel):
     hotkey: HotkeyConfig = Field(default_factory=HotkeyConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     model: ModelConfig = Field(default_factory=ModelConfig)
+    audio: AudioConfig = Field(default_factory=AudioConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     overlay: OverlayConfig = Field(default_factory=OverlayConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
@@ -135,6 +142,9 @@ model:
   default: small.en          # Options: tiny.en, base.en, small.en, medium.en
   device: auto               # auto, cpu, cuda
   compute_type: int8
+
+audio:
+  input_device: null         # Microphone name, or null for system default
 
 output:
   method: both               # clipboard, type, both

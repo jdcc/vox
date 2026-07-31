@@ -4,12 +4,13 @@ import asyncio
 import logging
 import signal
 
-from vox.config import Config, load_config
-from vox.client.audio import AudioRecorder
+from vox.client.audio import AudioRecorder, list_audio_devices
 from vox.client.connection import ConnectionState, ServerConnection, TranscriptionResponse
 from vox.client.hotkey import HotkeyListener, check_extension_available
 from vox.client.output import OutputHandler, check_wayland_tools
 from vox.client.overlay import Overlay
+from vox.config import Config, load_config
+from vox.config.mic_preferences import get_device_by_name, load_legacy_selected_device_name
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,8 @@ class Client:
         """
         self.config = config or load_config()
 
-        self.audio = AudioRecorder()
+        selected_device = self._get_selected_device()
+        self.audio = AudioRecorder(device=selected_device)
         self.output = OutputHandler(
             method=self.config.output.method,
             typing_method=self.config.output.typing_method,
@@ -46,6 +48,38 @@ class Client:
         self._is_recording = False
         self._pending_output: str | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+
+    def _get_selected_device(self) -> int | None:
+        """Get the selected microphone device index from preferences.
+
+        Returns:
+            Device index or None for default
+        """
+        devices = list_audio_devices()
+        if not devices:
+            return None
+
+        configured_name = self.config.audio.input_device
+        if configured_name:
+            device = get_device_by_name(devices, configured_name)
+            if device:
+                logger.info(f"Using configured microphone: {configured_name}")
+                return device["index"]
+
+            logger.warning(
+                "Configured microphone '%s' is not available; using system default",
+                configured_name,
+            )
+            return None
+
+        legacy_name = load_legacy_selected_device_name(devices)
+        if legacy_name:
+            device = get_device_by_name(devices, legacy_name)
+            if device:
+                logger.info(f"Using legacy microphone selection: {legacy_name}")
+                return device["index"]
+
+        return None
 
     def _on_connection_state_change(self, state: ConnectionState) -> None:
         """Handle connection state changes.

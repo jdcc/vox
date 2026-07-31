@@ -1,7 +1,7 @@
 """Tests for vox.server.app."""
 
+import asyncio
 import json
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -172,7 +172,7 @@ async def test_process_audio_missing_components() -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_audio_agent_flow() -> None:
+async def test_process_audio_agent_flow(monkeypatch) -> None:
     config = Config()
     server = Server(config=config)
     server.transcriber = MagicMock()
@@ -186,13 +186,18 @@ async def test_process_audio_agent_flow() -> None:
     websocket = MagicMock()
     websocket.send = AsyncMock()
 
+    async def to_thread_stub(func, *args):
+        return func(*args)
+
+    monkeypatch.setattr(asyncio, "to_thread", to_thread_stub)
+
     await server._process_audio(websocket, b"data")
 
     assert websocket.send.await_count == 3
 
 
 @pytest.mark.asyncio
-async def test_process_audio_no_agent_text() -> None:
+async def test_process_audio_no_agent_text(monkeypatch) -> None:
     config = Config()
     config.agent.enabled = False
     server = Server(config=config)
@@ -204,6 +209,11 @@ async def test_process_audio_no_agent_text() -> None:
 
     websocket = MagicMock()
     websocket.send = AsyncMock()
+
+    async def to_thread_stub(func, *args):
+        return func(*args)
+
+    monkeypatch.setattr(asyncio, "to_thread", to_thread_stub)
 
     await server._process_audio(websocket, b"data")
 

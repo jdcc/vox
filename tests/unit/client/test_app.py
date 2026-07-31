@@ -7,6 +7,7 @@ import pytest
 
 from vox.client.app import Client
 from vox.client.connection import ConnectionState, TranscriptionResponse
+from vox.config.schema import AudioConfig
 
 
 def test_on_hotkey_press_starts_recording(monkeypatch) -> None:
@@ -120,6 +121,90 @@ def test_on_connection_state_change() -> None:
     client._on_connection_state_change(ConnectionState.CONNECTED)
     client._on_connection_state_change(ConnectionState.DISCONNECTED)
     client._on_connection_state_change(ConnectionState.CONNECTING)
+
+
+def test_client_uses_configured_microphone(monkeypatch, sample_config) -> None:
+    sample_config.audio = AudioConfig(input_device="Desk Mic")
+    monkeypatch.setattr(
+        "vox.client.app.list_audio_devices",
+        lambda: [
+            {"index": 0, "name": "USB Mic", "channels": 1, "sample_rate": 48000},
+            {"index": 3, "name": "Desk Mic", "channels": 2, "sample_rate": 44100},
+        ],
+    )
+    legacy_loader = MagicMock(return_value="USB Mic")
+    monkeypatch.setattr("vox.client.app.load_legacy_selected_device_name", legacy_loader)
+
+    client = Client(config=sample_config)
+
+    assert client.audio.device == 3
+    legacy_loader.assert_not_called()
+
+
+def test_client_uses_legacy_microphone_when_config_unset(monkeypatch, sample_config) -> None:
+    sample_config.audio = AudioConfig(input_device=None)
+    monkeypatch.setattr(
+        "vox.client.app.list_audio_devices",
+        lambda: [
+            {"index": 4, "name": "USB Mic", "channels": 1, "sample_rate": 48000},
+        ],
+    )
+    monkeypatch.setattr(
+        "vox.client.app.load_legacy_selected_device_name", lambda _devices: "USB Mic"
+    )
+
+    client = Client(config=sample_config)
+
+    assert client.audio.device == 4
+
+
+def test_client_uses_default_when_configured_microphone_missing(monkeypatch, sample_config) -> None:
+    sample_config.audio = AudioConfig(input_device="Missing Mic")
+    monkeypatch.setattr(
+        "vox.client.app.list_audio_devices",
+        lambda: [
+            {"index": 0, "name": "USB Mic", "channels": 1, "sample_rate": 48000},
+        ],
+    )
+    legacy_loader = MagicMock(return_value="USB Mic")
+    monkeypatch.setattr("vox.client.app.load_legacy_selected_device_name", legacy_loader)
+
+    client = Client(config=sample_config)
+
+    assert client.audio.device is None
+    legacy_loader.assert_not_called()
+
+
+def test_client_uses_default_when_no_legacy_selection(monkeypatch, sample_config) -> None:
+    sample_config.audio = AudioConfig(input_device=None)
+    monkeypatch.setattr(
+        "vox.client.app.list_audio_devices",
+        lambda: [
+            {"index": 0, "name": "USB Mic", "channels": 1, "sample_rate": 48000},
+        ],
+    )
+    monkeypatch.setattr("vox.client.app.load_legacy_selected_device_name", lambda _devices: None)
+
+    client = Client(config=sample_config)
+
+    assert client.audio.device is None
+
+
+def test_client_uses_default_when_legacy_microphone_missing(monkeypatch, sample_config) -> None:
+    sample_config.audio = AudioConfig(input_device=None)
+    monkeypatch.setattr(
+        "vox.client.app.list_audio_devices",
+        lambda: [
+            {"index": 0, "name": "USB Mic", "channels": 1, "sample_rate": 48000},
+        ],
+    )
+    monkeypatch.setattr(
+        "vox.client.app.load_legacy_selected_device_name", lambda _devices: "Missing Mic"
+    )
+
+    client = Client(config=sample_config)
+
+    assert client.audio.device is None
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ import yaml
 
 from vox.config.schema import (
     AgentConfig,
+    AudioConfig,
     Config,
     HotkeyConfig,
     LLMConfig,
@@ -93,6 +94,18 @@ class TestOutputConfig:
             OutputConfig(method="invalid")
 
 
+class TestAudioConfig:
+    """Tests for AudioConfig model."""
+
+    def test_default_values(self):
+        config = AudioConfig()
+        assert config.input_device is None
+
+    def test_custom_input_device(self):
+        config = AudioConfig(input_device="USB Mic")
+        assert config.input_device == "USB Mic"
+
+
 class TestOverlayConfig:
     """Tests for OverlayConfig model."""
 
@@ -172,6 +185,7 @@ class TestConfig:
         assert isinstance(config.hotkey, HotkeyConfig)
         assert isinstance(config.server, ServerConfig)
         assert isinstance(config.model, ModelConfig)
+        assert isinstance(config.audio, AudioConfig)
         assert isinstance(config.output, OutputConfig)
         assert isinstance(config.overlay, OverlayConfig)
         assert isinstance(config.agent, AgentConfig)
@@ -190,6 +204,7 @@ class TestConfig:
         assert "hotkey" in data
         assert "server" in data
         assert "model" in data
+        assert "audio" in data
         assert data["hotkey"]["trigger"] == "ctrl+space"
 
 
@@ -285,6 +300,7 @@ class TestSaveConfig:
             config = Config(
                 hotkey=HotkeyConfig(trigger="f2"),
                 server=ServerConfig(port=5555),
+                audio=AudioConfig(input_device="USB Mic"),
             )
             save_config(config)
 
@@ -296,6 +312,7 @@ class TestSaveConfig:
 
             assert saved_data["hotkey"]["trigger"] == "f2"
             assert saved_data["server"]["port"] == 5555
+            assert saved_data["audio"]["input_device"] == "USB Mic"
 
     def test_save_config_creates_directory(self, tmp_path):
         with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(tmp_path)}):
@@ -322,6 +339,7 @@ class TestCreateDefaultConfig:
             assert "ctrl+space" in content
             assert "server:" in content
             assert "model:" in content
+            assert "audio:" in content
 
     def test_create_default_config_already_exists(self, tmp_path):
         config_dir = tmp_path / "vox"

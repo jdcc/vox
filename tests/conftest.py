@@ -29,11 +29,9 @@ if "sounddevice" not in sys.modules:
     stub.query_devices = lambda *_args, **_kwargs: []
     sys.modules["sounddevice"] = stub
 
-import asyncio
 import os
-import tempfile
 from pathlib import Path
-from typing import AsyncGenerator, Generator
+from typing import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -42,6 +40,7 @@ import pytest
 from vox.config import Config
 from vox.config.schema import (
     AgentConfig,
+    AudioConfig,
     HotkeyConfig,
     LLMConfig,
     ModelConfig,
@@ -78,6 +77,7 @@ def sample_config() -> Config:
         hotkey=HotkeyConfig(trigger="ctrl+space"),
         server=ServerConfig(host="localhost", port=9876),
         model=ModelConfig(default="small.en", device="cpu", compute_type="int8"),
+        audio=AudioConfig(input_device=None),
         output=OutputConfig(method="both", typing_method="paste"),
         overlay=OverlayConfig(enabled=True, position="top-right"),
         agent=AgentConfig(

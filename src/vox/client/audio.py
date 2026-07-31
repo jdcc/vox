@@ -19,14 +19,20 @@ BLOCK_SIZE = 1024
 class AudioRecorder:
     """Records audio from the microphone."""
 
-    def __init__(self, sample_rate: int = SAMPLE_RATE) -> None:
+    def __init__(
+        self,
+        sample_rate: int = SAMPLE_RATE,
+        device: int | str | None = None,
+    ) -> None:
         """Initialize the audio recorder.
 
         Args:
             sample_rate: Sample rate for recording (default 16kHz for Whisper)
+            device: Device index (int), name (str), or None for default
         """
         self.sample_rate = sample_rate
         self.channels = CHANNELS
+        self.device = device
         self.is_recording = False
         self._audio_queue: queue.Queue[np.ndarray] = queue.Queue()
         self._stream: sd.InputStream | None = None
@@ -74,6 +80,7 @@ class AudioRecorder:
                     dtype=DTYPE,
                     blocksize=BLOCK_SIZE,
                     callback=self._audio_callback,
+                    device=self.device,
                 )
                 self._stream.start()
 
