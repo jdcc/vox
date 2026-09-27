@@ -144,7 +144,8 @@ model:
   compute_type: int8
 
 audio:
-  input_device: null         # Microphone name, or null for system default
+  input_device: null         # Force a specific microphone name, or null to let vox
+                              # remember your last pick per USB/hardware setup (via the TUI)
 
 output:
   method: both               # clipboard, type, both

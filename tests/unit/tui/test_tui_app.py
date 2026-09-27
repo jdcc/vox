@@ -54,28 +54,34 @@ def make_config() -> Config:
 def configure_app(monkeypatch, config: Config, models: list[FakeModel], devices: list[dict]):
     """Patch the TUI module dependencies and return a save log."""
     saved_configs: list[dict] = []
+    saved_preferences: list[tuple[list[dict], str | None]] = []
     monkeypatch.setattr("vox.tui.app.load_config", lambda: config)
     monkeypatch.setattr(
         "vox.tui.app.save_config", lambda cfg: saved_configs.append(cfg.model_dump())
     )
     monkeypatch.setattr("vox.tui.app.list_audio_devices", lambda: devices)
-    monkeypatch.setattr("vox.tui.app.load_legacy_selected_device_name", lambda _devices: None)
+    monkeypatch.setattr("vox.tui.app.load_preferred_device_name", lambda _devices: None)
+    monkeypatch.setattr(
+        "vox.tui.app.save_device_preference",
+        lambda devs, name: saved_preferences.append((devs, name)),
+    )
     monkeypatch.setattr("vox.tui.app.ModelsDB", lambda: FakeModelsDB(models))
     monkeypatch.setattr("vox.tui.app.ModelManager", lambda: MagicMock())
-    return saved_configs
+    return saved_configs, saved_preferences
 
 
 @pytest.mark.asyncio
 async def test_tui_selects_microphone_and_updates_summary(monkeypatch) -> None:
     config = make_config()
-    saved_configs = configure_app(
+    devices = [
+        {"name": "USB Mic", "channels": 1, "sample_rate": 48000},
+        {"name": "Desk Mic", "channels": 2, "sample_rate": 44100},
+    ]
+    saved_configs, saved_preferences = configure_app(
         monkeypatch,
         config,
         [FakeModel("small.en", "Small", "488MB")],
-        [
-            {"name": "USB Mic", "channels": 1, "sample_rate": 48000},
-            {"name": "Desk Mic", "channels": 2, "sample_rate": 44100},
-        ],
+        devices,
     )
     app = VoxApp()
 
@@ -86,15 +92,41 @@ async def test_tui_selects_microphone_and_updates_summary(monkeypatch) -> None:
 
         summary = str(app.query_one("#summary-primary", Label).render())
 
-    assert config.audio.input_device == "USB Mic"
-    assert saved_configs[-1]["audio"]["input_device"] == "USB Mic"
+    # Selecting a microphone is now remembered per hardware configuration
+    # rather than pinned globally in config.yaml.
+    assert config.audio.input_device is None
+    assert saved_configs[-1]["audio"]["input_device"] is None
+    assert saved_preferences[-1] == (devices, "USB Mic")
     assert "USB Mic" in summary
+
+
+@pytest.mark.asyncio
+async def test_tui_resets_microphone_to_default(monkeypatch) -> None:
+    config = make_config()
+    config.audio.input_device = "USB Mic"
+    devices = [{"name": "USB Mic", "channels": 1, "sample_rate": 48000}]
+    saved_configs, saved_preferences = configure_app(
+        monkeypatch,
+        config,
+        [FakeModel("small.en", "Small", "488MB")],
+        devices,
+    )
+    app = VoxApp()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("up", "enter")
+        await pilot.pause()
+
+    assert config.audio.input_device is None
+    assert saved_configs[-1]["audio"]["input_device"] is None
+    assert saved_preferences[-1] == (devices, None)
 
 
 @pytest.mark.asyncio
 async def test_tui_selects_downloaded_model(monkeypatch) -> None:
     config = make_config()
-    saved_configs = configure_app(
+    saved_configs, _saved_preferences = configure_app(
         monkeypatch,
         config,
         [
@@ -119,7 +151,7 @@ async def test_tui_selects_downloaded_model(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_tui_updates_core_settings(monkeypatch) -> None:
     config = make_config()
-    saved_configs = configure_app(
+    saved_configs, _saved_preferences = configure_app(
         monkeypatch,
         config,
         [FakeModel("small.en", "Small", "488MB")],

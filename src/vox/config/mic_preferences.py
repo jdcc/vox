@@ -94,14 +94,15 @@ def get_device_by_name(devices: list[dict], name: str) -> dict | None:
     return None
 
 
-def load_legacy_selected_device_name(devices: list[dict]) -> str | None:
-    """Load a legacy microphone selection for the current device set.
+def load_preferred_device_name(devices: list[dict]) -> str | None:
+    """Look up the remembered microphone for the current hardware configuration.
 
     Args:
         devices: List of currently available devices
 
     Returns:
-        Saved device name or None if no legacy selection exists
+        The device name last selected for this exact set of devices, or None if
+        this hardware configuration has never been seen before.
     """
     if not devices:
         return None
@@ -113,3 +114,27 @@ def load_legacy_selected_device_name(devices: list[dict]) -> str | None:
         return prefs.preferences[fingerprint].selected_device
 
     return None
+
+
+def save_device_preference(devices: list[dict], device_name: str | None) -> None:
+    """Remember the selected microphone for the current hardware configuration.
+
+    Args:
+        devices: List of currently available devices
+        device_name: Device name to remember, or None to forget any saved
+            preference for this configuration (reverting it to the system default)
+    """
+    if not devices:
+        return
+
+    fingerprint = compute_config_fingerprint(devices)
+    prefs = load_mic_preferences()
+
+    if device_name is None:
+        if fingerprint not in prefs.preferences:
+            return
+        del prefs.preferences[fingerprint]
+    else:
+        prefs.preferences[fingerprint] = MicPreference(selected_device=device_name)
+
+    save_mic_preferences(prefs)

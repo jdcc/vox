@@ -27,6 +27,7 @@ if "sounddevice" not in sys.modules:
     stub.CallbackFlags = object
     stub.default = types.SimpleNamespace(device=(None, None))
     stub.query_devices = lambda *_args, **_kwargs: []
+    stub.query_hostapis = lambda *_args, **_kwargs: []
     sys.modules["sounddevice"] = stub
 
 import os
@@ -128,14 +129,17 @@ def mock_sounddevice() -> Generator[MagicMock, None, None]:
                 "max_input_channels": 2,
                 "max_output_channels": 0,
                 "default_samplerate": 48000.0,
+                "hostapi": 0,
             },
             {
                 "name": "Test Speaker",
                 "max_input_channels": 0,
                 "max_output_channels": 2,
                 "default_samplerate": 48000.0,
+                "hostapi": 0,
             },
         ]
+        mock_sd.query_hostapis.return_value = [{"name": "ALSA", "devices": [0, 1]}]
 
         mock_stream = MagicMock()
         mock_sd.InputStream.return_value = mock_stream

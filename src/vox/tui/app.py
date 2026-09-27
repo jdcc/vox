@@ -15,8 +15,9 @@ from vox.config import (
     ModelsDB,
     get_device_by_name,
     load_config,
-    load_legacy_selected_device_name,
+    load_preferred_device_name,
     save_config,
+    save_device_preference,
 )
 from vox.server.model_manager import ModelManager
 
@@ -235,7 +236,7 @@ class VoxApp(App):
         self.model_manager = ModelManager()
         self.devices: list[dict] = []
         self._selected_mic_name: str | None = None
-        self._legacy_mic_name: str | None = None
+        self._remembered_mic_name: str | None = None
         self._missing_mic_name: str | None = None
         self._banner_message = ""
         self._suspend_control_events = True
@@ -357,7 +358,7 @@ class VoxApp(App):
     def refresh_microphones(self, *, show_message: bool) -> None:
         """Reload the microphone list from the current audio devices."""
         self.devices = list_audio_devices()
-        self._legacy_mic_name = load_legacy_selected_device_name(self.devices)
+        self._remembered_mic_name = load_preferred_device_name(self.devices)
         self._missing_mic_name = None
 
         configured_name = self.config.audio.input_device
@@ -367,8 +368,10 @@ class VoxApp(App):
                 selected_name = configured_name
             else:
                 self._missing_mic_name = configured_name
-        elif self._legacy_mic_name and get_device_by_name(self.devices, self._legacy_mic_name):
-            selected_name = self._legacy_mic_name
+        elif self._remembered_mic_name and get_device_by_name(
+            self.devices, self._remembered_mic_name
+        ):
+            selected_name = self._remembered_mic_name
 
         self._selected_mic_name = selected_name
 
@@ -497,17 +500,22 @@ class VoxApp(App):
         self.notify(f"Downloaded {model.id}.")
 
     def _select_microphone(self, device_name: str | None) -> None:
-        """Persist the selected microphone."""
-        self.config.audio.input_device = device_name
+        """Remember the selected microphone for the current hardware configuration."""
+        save_device_preference(self.devices, device_name)
+
+        # The TUI now manages selections per hardware configuration; drop any
+        # static override so the remembered-per-configuration choice applies.
+        self.config.audio.input_device = None
+        self._remembered_mic_name = device_name
         self._selected_mic_name = device_name
         self._missing_mic_name = None
         self._sync_microphone_selection()
 
         if device_name is None:
-            self._persist_config("Microphone reset to system default.")
+            self._persist_config("Microphone reset to system default for this hardware setup.")
             return
 
-        self._persist_config(f"Microphone set to {device_name}.")
+        self._persist_config(f"Microphone set to {device_name} for this hardware setup.")
 
     def _select_model(self, model: ModelInfo) -> None:
         """Persist the selected model when it is available locally."""
@@ -573,10 +581,10 @@ class VoxApp(App):
                 "System default will be used until you pick another."
             )
 
-        if self.config.audio.input_device is None and self._legacy_mic_name:
+        if self.config.audio.input_device is None and self._remembered_mic_name:
             return (
-                f"Using legacy microphone selection '{self._legacy_mic_name}' "
-                "until you save a new choice."
+                f"Using remembered microphone '{self._remembered_mic_name}' "
+                "for this hardware setup."
             )
 
         return "Enter selects, Tab moves focus, r refreshes devices, d downloads models."
@@ -584,9 +592,9 @@ class VoxApp(App):
     def _selected_mic_label(self) -> str:
         """Return the display label for the active microphone."""
         if self._selected_mic_name:
-            is_legacy = self._legacy_mic_name == self._selected_mic_name
-            if self.config.audio.input_device is None and is_legacy:
-                return f"{self._selected_mic_name} (legacy)"
+            is_remembered = self._remembered_mic_name == self._selected_mic_name
+            if self.config.audio.input_device is None and is_remembered:
+                return f"{self._selected_mic_name} (remembered)"
             return self._selected_mic_name
 
         if self._missing_mic_name:

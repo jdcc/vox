@@ -6,8 +6,9 @@ from vox.config.mic_preferences import (
     compute_config_fingerprint,
     get_device_by_name,
     get_mic_preferences_path,
-    load_legacy_selected_device_name,
     load_mic_preferences,
+    load_preferred_device_name,
+    save_device_preference,
     save_mic_preferences,
 )
 from vox.config.models_db import ModelInfo, ModelsDB
@@ -34,7 +35,8 @@ __all__ = [
     "compute_config_fingerprint",
     "get_device_by_name",
     "get_mic_preferences_path",
-    "load_legacy_selected_device_name",
     "load_mic_preferences",
+    "load_preferred_device_name",
+    "save_device_preference",
     "save_mic_preferences",
 ]

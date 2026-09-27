@@ -32,6 +32,26 @@ def test_on_hotkey_press_ignores_when_disconnected() -> None:
     client.audio.start_recording.assert_not_called()
 
 
+def test_on_hotkey_press_start_recording_fails(monkeypatch) -> None:
+    client = Client()
+    client.connection._state = ConnectionState.CONNECTED
+    client.audio.start_recording = MagicMock(side_effect=RuntimeError("no device"))
+    client.overlay.recording = MagicMock()
+    client.overlay.failure = MagicMock()
+    client._loop = asyncio.get_event_loop()
+
+    run_stub = MagicMock()
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", run_stub)
+
+    client._on_hotkey_press()
+
+    assert client._is_recording is False
+    client.overlay.recording.assert_not_called()
+    client.overlay.failure.assert_called_once()
+    run_stub.assert_called_once()
+    run_stub.call_args.args[0].close()
+
+
 def test_on_hotkey_release_sends_audio(monkeypatch) -> None:
     client = Client()
     client._is_recording = True
@@ -57,6 +77,7 @@ def test_on_hotkey_release_empty_audio(monkeypatch) -> None:
     client._is_recording = True
     client.audio.stop_recording = MagicMock(return_value=b"")
     client.overlay.processing = MagicMock()
+    client.overlay.failure = MagicMock()
     client._loop = asyncio.get_event_loop()
 
     run_stub = MagicMock()
@@ -64,7 +85,22 @@ def test_on_hotkey_release_empty_audio(monkeypatch) -> None:
 
     client._on_hotkey_release()
 
-    run_stub.assert_not_called()
+    client.overlay.failure.assert_called_once()
+    run_stub.assert_called_once()
+    run_stub.call_args.args[0].close()
+
+
+def test_on_hotkey_release_empty_audio_no_loop() -> None:
+    client = Client()
+    client._is_recording = True
+    client.audio.stop_recording = MagicMock(return_value=b"")
+    client.overlay.processing = MagicMock()
+    client.overlay.failure = MagicMock()
+    client._loop = None
+
+    client._on_hotkey_release()
+
+    client.overlay.failure.assert_called_once()
 
 
 def test_on_hotkey_release_not_recording() -> None:
@@ -132,16 +168,16 @@ def test_client_uses_configured_microphone(monkeypatch, sample_config) -> None:
             {"index": 3, "name": "Desk Mic", "channels": 2, "sample_rate": 44100},
         ],
     )
-    legacy_loader = MagicMock(return_value="USB Mic")
-    monkeypatch.setattr("vox.client.app.load_legacy_selected_device_name", legacy_loader)
+    preferred_loader = MagicMock(return_value="USB Mic")
+    monkeypatch.setattr("vox.client.app.load_preferred_device_name", preferred_loader)
 
     client = Client(config=sample_config)
 
     assert client.audio.device == 3
-    legacy_loader.assert_not_called()
+    preferred_loader.assert_not_called()
 
 
-def test_client_uses_legacy_microphone_when_config_unset(monkeypatch, sample_config) -> None:
+def test_client_uses_remembered_microphone_when_config_unset(monkeypatch, sample_config) -> None:
     sample_config.audio = AudioConfig(input_device=None)
     monkeypatch.setattr(
         "vox.client.app.list_audio_devices",
@@ -150,7 +186,7 @@ def test_client_uses_legacy_microphone_when_config_unset(monkeypatch, sample_con
         ],
     )
     monkeypatch.setattr(
-        "vox.client.app.load_legacy_selected_device_name", lambda _devices: "USB Mic"
+        "vox.client.app.load_preferred_device_name", lambda _devices: "USB Mic"
     )
 
     client = Client(config=sample_config)
@@ -166,16 +202,16 @@ def test_client_uses_default_when_configured_microphone_missing(monkeypatch, sam
             {"index": 0, "name": "USB Mic", "channels": 1, "sample_rate": 48000},
         ],
     )
-    legacy_loader = MagicMock(return_value="USB Mic")
-    monkeypatch.setattr("vox.client.app.load_legacy_selected_device_name", legacy_loader)
+    preferred_loader = MagicMock(return_value="USB Mic")
+    monkeypatch.setattr("vox.client.app.load_preferred_device_name", preferred_loader)
 
     client = Client(config=sample_config)
 
     assert client.audio.device is None
-    legacy_loader.assert_not_called()
+    preferred_loader.assert_not_called()
 
 
-def test_client_uses_default_when_no_legacy_selection(monkeypatch, sample_config) -> None:
+def test_client_uses_default_when_no_remembered_selection(monkeypatch, sample_config) -> None:
     sample_config.audio = AudioConfig(input_device=None)
     monkeypatch.setattr(
         "vox.client.app.list_audio_devices",
@@ -183,14 +219,14 @@ def test_client_uses_default_when_no_legacy_selection(monkeypatch, sample_config
             {"index": 0, "name": "USB Mic", "channels": 1, "sample_rate": 48000},
         ],
     )
-    monkeypatch.setattr("vox.client.app.load_legacy_selected_device_name", lambda _devices: None)
+    monkeypatch.setattr("vox.client.app.load_preferred_device_name", lambda _devices: None)
 
     client = Client(config=sample_config)
 
     assert client.audio.device is None
 
 
-def test_client_uses_default_when_legacy_microphone_missing(monkeypatch, sample_config) -> None:
+def test_client_uses_default_when_remembered_microphone_missing(monkeypatch, sample_config) -> None:
     sample_config.audio = AudioConfig(input_device=None)
     monkeypatch.setattr(
         "vox.client.app.list_audio_devices",
@@ -199,12 +235,25 @@ def test_client_uses_default_when_legacy_microphone_missing(monkeypatch, sample_
         ],
     )
     monkeypatch.setattr(
-        "vox.client.app.load_legacy_selected_device_name", lambda _devices: "Missing Mic"
+        "vox.client.app.load_preferred_device_name", lambda _devices: "Missing Mic"
     )
 
     client = Client(config=sample_config)
 
     assert client.audio.device is None
+
+
+def test_on_hotkey_press_refreshes_device_before_recording(monkeypatch) -> None:
+    client = Client()
+    client.connection._state = ConnectionState.CONNECTED
+    client.audio.start_recording = MagicMock()
+    client.audio.set_device = MagicMock()
+    client.overlay.recording = MagicMock()
+    monkeypatch.setattr(client, "_get_selected_device", lambda: 3)
+
+    client._on_hotkey_press()
+
+    client.audio.set_device.assert_called_once_with(3)
 
 
 @pytest.mark.asyncio

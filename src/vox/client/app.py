@@ -10,7 +10,7 @@ from vox.client.hotkey import HotkeyListener, check_extension_available
 from vox.client.output import OutputHandler, check_wayland_tools
 from vox.client.overlay import Overlay
 from vox.config import Config, load_config
-from vox.config.mic_preferences import get_device_by_name, load_legacy_selected_device_name
+from vox.config.mic_preferences import get_device_by_name, load_preferred_device_name
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,11 @@ class Client:
         self._loop: asyncio.AbstractEventLoop | None = None
 
     def _get_selected_device(self) -> int | None:
-        """Get the selected microphone device index from preferences.
+        """Get the microphone device index for the current hardware configuration.
+
+        Re-lists input devices on every call so hotplug/unplug events (a mic
+        disappearing, a new set of devices appearing) are picked up freshly
+        each time this is called, rather than frozen at startup.
 
         Returns:
             Device index or None for default
@@ -72,11 +76,11 @@ class Client:
             )
             return None
 
-        legacy_name = load_legacy_selected_device_name(devices)
-        if legacy_name:
-            device = get_device_by_name(devices, legacy_name)
+        preferred_name = load_preferred_device_name(devices)
+        if preferred_name:
+            device = get_device_by_name(devices, preferred_name)
             if device:
-                logger.info(f"Using legacy microphone selection: {legacy_name}")
+                logger.info(f"Using remembered microphone for this hardware: {preferred_name}")
                 return device["index"]
 
         return None
@@ -125,9 +129,17 @@ class Client:
     def _on_hotkey_press(self) -> None:
         """Handle hotkey press (start recording)."""
         if not self._is_recording and self.connection.is_connected:
+            self.audio.set_device(self._get_selected_device())
+
+            try:
+                self.audio.start_recording()
+            except Exception as e:
+                logger.error(f"Failed to start recording: {e}")
+                self._flash_failure()
+                return
+
             self._is_recording = True
             self.overlay.recording()
-            self.audio.start_recording()
             logger.info("Recording started")
 
     def _on_hotkey_release(self) -> None:
@@ -147,6 +159,18 @@ class Client:
                     ),
                     self._loop,
                 )
+            else:
+                self._flash_failure()
+
+    def _flash_failure(self) -> None:
+        """Show the failure indicator, then hide it after a beat.
+
+        Used whenever recording never produces audio to send to the server,
+        so the overlay doesn't stay stuck on "processing" forever.
+        """
+        self.overlay.failure()
+        if self._loop:
+            asyncio.run_coroutine_threadsafe(self._output_text(""), self._loop)
 
     async def start(self) -> None:
         """Start the client."""
