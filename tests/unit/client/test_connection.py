@@ -193,6 +193,16 @@ async def test_handle_message_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_handle_message_error_invokes_callback() -> None:
+    on_error = MagicMock()
+    connection = ServerConnection(on_error=on_error)
+
+    await connection._handle_message(json.dumps({"type": "ERROR", "error": "bad"}))
+
+    on_error.assert_called_once_with("bad")
+
+
+@pytest.mark.asyncio
 async def test_handle_message_pong() -> None:
     connection = ServerConnection()
     await connection._handle_message(json.dumps({"type": "PONG"}))
@@ -230,7 +240,7 @@ async def test_handle_message_callback_error() -> None:
 @pytest.mark.asyncio
 async def test_send_audio_not_connected() -> None:
     connection = ServerConnection()
-    await connection.send_audio(b"abc")
+    assert await connection.send_audio(b"abc") is False
 
 
 @pytest.mark.asyncio
@@ -239,7 +249,9 @@ async def test_send_audio_success(mock_websocket) -> None:
     connection._ws = mock_websocket
     connection._state = ConnectionState.CONNECTED
 
-    await connection.send_audio(b"a" * (64 * 1024 + 10), sample_rate=22050, channels=2)
+    sent = await connection.send_audio(b"a" * (64 * 1024 + 10), sample_rate=22050, channels=2)
+
+    assert sent is True
 
     assert mock_websocket.send.await_count == 4
     start_message = json.loads(mock_websocket.send.await_args_list[0].args[0])
@@ -258,7 +270,7 @@ async def test_send_audio_error(mock_websocket) -> None:
     connection._state = ConnectionState.CONNECTED
     mock_websocket.send = AsyncMock(side_effect=RuntimeError("boom"))
 
-    await connection.send_audio(b"abc")
+    assert await connection.send_audio(b"abc") is False
 
 
 @pytest.mark.asyncio

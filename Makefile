@@ -117,11 +117,16 @@ uninstall-extension:
 	@echo "Extension uninstalled."
 
 # Systemd user service commands
+UV_BIN := $(shell command -v uv)
+
 install-services:
 	@echo "Installing Vox systemd user services..."
+	@test -n "$(UV_BIN)" || (echo "uv not found on PATH" && exit 1)
 	@mkdir -p ~/.config/systemd/user
-	@cp systemd/vox-server.service ~/.config/systemd/user/
-	@cp systemd/vox-client.service ~/.config/systemd/user/
+	@# systemd starts user units before the login shell's PATH is imported, so
+	@# pin the absolute uv path instead of relying on /usr/bin/env lookup.
+	@sed "s|/usr/bin/env uv|$(UV_BIN)|" systemd/vox-server.service > ~/.config/systemd/user/vox-server.service
+	@sed "s|/usr/bin/env uv|$(UV_BIN)|" systemd/vox-client.service > ~/.config/systemd/user/vox-client.service
 	@systemctl --user daemon-reload
 	@systemctl --user enable vox-server.service vox-client.service
 	@echo ""

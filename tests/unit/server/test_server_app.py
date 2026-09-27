@@ -197,6 +197,34 @@ async def test_process_audio_agent_flow(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_process_audio_agent_failure_falls_back_to_transcription(monkeypatch) -> None:
+    server = Server(config=Config())
+    server.transcriber = MagicMock()
+    server.agent = MagicMock()
+    server.agent.process = AsyncMock(side_effect=RuntimeError("Missing API key"))
+    server.transcriber.transcribe_bytes = MagicMock(
+        return_value=TranscriptionResult(text="hello, Agent, tidy this up")
+    )
+
+    websocket = MagicMock()
+    websocket.send = AsyncMock()
+
+    async def to_thread_stub(func, *args):
+        return func(*args)
+
+    monkeypatch.setattr(asyncio, "to_thread", to_thread_stub)
+
+    await server._process_audio(websocket, b"data")
+
+    final = json.loads(websocket.send.await_args_list[-1].args[0])
+    assert final == {
+        "type": "TRANSCRIPTION",
+        "text": "hello, Agent, tidy this up",
+        "processing": False,
+    }
+
+
+@pytest.mark.asyncio
 async def test_process_audio_no_agent_text(monkeypatch) -> None:
     config = Config()
     config.agent.enabled = False

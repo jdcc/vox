@@ -40,6 +40,7 @@ class ServerConnection:
         port: int = 9876,
         on_state_change: Callable[[ConnectionState], None] | None = None,
         on_transcription: Callable[[TranscriptionResponse], None] | None = None,
+        on_error: Callable[[str], None] | None = None,
     ) -> None:
         """Initialize the server connection.
 
@@ -48,11 +49,13 @@ class ServerConnection:
             port: Server port
             on_state_change: Callback for connection state changes
             on_transcription: Callback for transcription results
+            on_error: Callback for error messages reported by the server
         """
         self.host = host
         self.port = port
         self.on_state_change = on_state_change
         self.on_transcription = on_transcription
+        self.on_error = on_error
 
         self._ws: WebSocketClientProtocol | None = None
         self._state = ConnectionState.DISCONNECTED
@@ -179,7 +182,10 @@ class ServerConnection:
                 logger.debug("Server is processing audio")
 
             elif msg_type == "ERROR":
-                logger.error(f"Server error: {data.get('error')}")
+                error = str(data.get("error", ""))
+                logger.error(f"Server error: {error}")
+                if self.on_error:
+                    self.on_error(error)
 
             elif msg_type == "PONG":
                 logger.debug("Received pong")
@@ -219,17 +225,20 @@ class ServerConnection:
         audio_bytes: bytes,
         sample_rate: int = 16000,
         channels: int = 1,
-    ) -> None:
+    ) -> bool:
         """Send audio data to server for transcription.
 
         Args:
             audio_bytes: Raw PCM audio bytes
             sample_rate: Sample rate of the audio
             channels: Number of audio channels
+
+        Returns:
+            True if the audio was fully sent
         """
         if not self._ws or self._state != ConnectionState.CONNECTED:
             logger.warning("Not connected to server")
-            return
+            return False
 
         try:
             start_message = json.dumps({
@@ -250,8 +259,10 @@ class ServerConnection:
             logger.debug(
                 f"Sent {len(audio_bytes)} bytes of audio in {chunk_count} chunks"
             )
+            return True
         except Exception as e:
             logger.error(f"Error sending audio: {e}")
+            return False
 
     async def ping(self) -> bool:
         """Send a ping to the server.

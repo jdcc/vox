@@ -1,5 +1,6 @@
 """Global hotkey handling via GNOME Shell extension D-Bus signals."""
 
+import asyncio
 import logging
 from typing import Callable
 
@@ -93,6 +94,7 @@ async def check_extension_available() -> bool:
     Returns:
         True if extension is available
     """
+    bus = None
     try:
         bus = await MessageBus().connect()
         introspection = await bus.introspect(DBUS_NAME, DBUS_PATH)
@@ -100,13 +102,35 @@ async def check_extension_available() -> bool:
         interface = proxy.get_interface(DBUS_INTERFACE)
         # Try to call GetState to verify the extension is responsive
         await interface.call_get_state()
-        bus.disconnect()
         return True
     except DBusError:
         return False
     except Exception as e:
         logger.debug(f"Error checking extension: {e}")
         return False
+    finally:
+        if bus:
+            bus.disconnect()
+
+
+async def wait_for_extension(attempts: int = 60, interval: float = 2.0) -> bool:
+    """Poll until the Vox GNOME Shell extension is available.
+
+    At login the client can start before GNOME Shell has enabled extensions,
+    so give the extension time to come up rather than failing immediately.
+
+    Args:
+        attempts: Maximum number of availability checks
+        interval: Seconds to wait between checks
+
+    Returns:
+        True if the extension became available
+    """
+    for _ in range(attempts):
+        if await check_extension_available():
+            return True
+        await asyncio.sleep(interval)
+    return False
 
 
 def check_input_permissions() -> bool:

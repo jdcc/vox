@@ -1,12 +1,13 @@
 """Client application main loop."""
 
 import asyncio
+import contextlib
 import logging
 import signal
 
 from vox.client.audio import AudioRecorder, list_audio_devices
 from vox.client.connection import ConnectionState, ServerConnection, TranscriptionResponse
-from vox.client.hotkey import HotkeyListener, check_extension_available
+from vox.client.hotkey import HotkeyListener, check_extension_available, wait_for_extension
 from vox.client.output import OutputHandler, check_wayland_tools
 from vox.client.overlay import Overlay
 from vox.config import Config, load_config
@@ -37,6 +38,7 @@ class Client:
             port=self.config.server.port,
             on_state_change=self._on_connection_state_change,
             on_transcription=self._on_transcription,
+            on_error=self._on_server_error,
         )
         self.hotkey: HotkeyListener | None = None
         self.overlay = Overlay(
@@ -46,8 +48,10 @@ class Client:
 
         self._running = False
         self._is_recording = False
+        self._awaiting_result = False
         self._pending_output: str | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._output_start_task: asyncio.Task | None = None
 
     def _get_selected_device(self) -> int | None:
         """Get the microphone device index for the current hardware configuration.
@@ -95,6 +99,16 @@ class Client:
             logger.info("Connected to server")
         elif state == ConnectionState.DISCONNECTED:
             logger.info("Disconnected from server")
+            if self._awaiting_result:
+                self._flash_failure()
+
+    def _on_server_error(self, error: str) -> None:
+        """Handle an error reported by the server.
+
+        Args:
+            error: Error message from the server
+        """
+        self._flash_failure()
 
     def _on_transcription(self, response: TranscriptionResponse) -> None:
         """Handle transcription results.
@@ -106,6 +120,7 @@ class Client:
             logger.info(f"Transcribed: {response.text} (processing with agent...)")
         else:
             logger.info(f"Final text: {response.text}")
+            self._awaiting_result = False
             self._pending_output = response.text
             self.overlay.success()
 
@@ -128,19 +143,26 @@ class Client:
 
     def _on_hotkey_press(self) -> None:
         """Handle hotkey press (start recording)."""
-        if not self._is_recording and self.connection.is_connected:
-            self.audio.set_device(self._get_selected_device())
+        if self._is_recording:
+            return
 
-            try:
-                self.audio.start_recording()
-            except Exception as e:
-                logger.error(f"Failed to start recording: {e}")
-                self._flash_failure()
-                return
+        if not self.connection.is_connected:
+            logger.warning("Hotkey pressed but not connected to server")
+            self._flash_failure()
+            return
 
-            self._is_recording = True
-            self.overlay.recording()
-            logger.info("Recording started")
+        self.audio.set_device(self._get_selected_device())
+
+        try:
+            self.audio.start_recording()
+        except Exception as e:
+            logger.error(f"Failed to start recording: {e}")
+            self._flash_failure()
+            return
+
+        self._is_recording = True
+        self.overlay.recording()
+        logger.info("Recording started")
 
     def _on_hotkey_release(self) -> None:
         """Handle hotkey release (stop recording and send audio)."""
@@ -151,23 +173,33 @@ class Client:
             logger.info(f"Recording stopped, {len(audio_bytes)} bytes")
 
             if audio_bytes and self._loop:
-                asyncio.run_coroutine_threadsafe(
-                    self.connection.send_audio(
-                        audio_bytes,
-                        sample_rate=self.audio.sample_rate,
-                        channels=self.audio.channels,
-                    ),
-                    self._loop,
-                )
+                self._awaiting_result = True
+                asyncio.run_coroutine_threadsafe(self._send_audio(audio_bytes), self._loop)
             else:
                 self._flash_failure()
+
+    async def _send_audio(self, audio_bytes: bytes) -> None:
+        """Send recorded audio to the server, flagging failure if it can't be sent.
+
+        Args:
+            audio_bytes: Raw PCM audio bytes
+        """
+        sent = await self.connection.send_audio(
+            audio_bytes,
+            sample_rate=self.audio.sample_rate,
+            channels=self.audio.channels,
+        )
+        if not sent:
+            self._flash_failure()
 
     def _flash_failure(self) -> None:
         """Show the failure indicator, then hide it after a beat.
 
-        Used whenever recording never produces audio to send to the server,
-        so the overlay doesn't stay stuck on "processing" forever.
+        Used whenever a recording won't produce a transcription (no audio,
+        send failure, server error, lost connection), so the overlay doesn't
+        stay stuck on "processing" forever.
         """
+        self._awaiting_result = False
         self.overlay.failure()
         if self._loop:
             asyncio.run_coroutine_threadsafe(self._output_text(""), self._loop)
@@ -176,14 +208,7 @@ class Client:
         """Start the client."""
         self._loop = asyncio.get_event_loop()
 
-        # Check if GNOME extension is available
-        if not await check_extension_available():
-            logger.warning(
-                "Vox GNOME Shell extension not available. "
-                "Install with: make install-extension\n"
-                "Then enable: gnome-extensions enable vox@local\n"
-                "And restart GNOME Shell (log out/in on Wayland)"
-            )
+        await self._wait_for_extension()
 
         tools = check_wayland_tools()
         missing_clipboard = [t for t in ("wl-copy", "wl-paste") if not tools.get(t, False)]
@@ -193,7 +218,10 @@ class Client:
                 "Install with: sudo apt install wl-clipboard"
             )
 
-        await self.output.start()
+        # Portal setup can wait on a permission dialog; don't hold the hotkey
+        # and server connection hostage to it. Until it's ready, results still
+        # land on the clipboard.
+        self._output_start_task = asyncio.create_task(self.output.start())
 
         await self.overlay.start()
 
@@ -209,7 +237,7 @@ class Client:
             await self.hotkey.start()
         except RuntimeError as e:
             logger.error(f"Failed to start hotkey listener: {e}")
-            return
+            raise
 
         self._running = True
 
@@ -221,12 +249,35 @@ class Client:
         while self._running:
             await asyncio.sleep(1)
 
+    async def _wait_for_extension(self) -> None:
+        """Wait for the GNOME Shell extension that provides hotkeys and the overlay.
+
+        Raises:
+            RuntimeError: If the extension never becomes available
+        """
+        if await check_extension_available():
+            return
+
+        logger.info("Waiting for Vox GNOME Shell extension to become available...")
+        if not await wait_for_extension():
+            raise RuntimeError(
+                "Vox GNOME Shell extension not available. "
+                "Install with: make install-extension\n"
+                "Then enable: gnome-extensions enable vox@local\n"
+                "And restart GNOME Shell (log out/in on Wayland)"
+            )
+
     async def stop(self) -> None:
         """Stop the client."""
         self._running = False
 
         if self.hotkey:
             await self.hotkey.stop()
+
+        if self._output_start_task and not self._output_start_task.done():
+            self._output_start_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._output_start_task
 
         await self.output.stop()
         await self.connection.disconnect()

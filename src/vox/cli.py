@@ -59,7 +59,12 @@ def client(ctx: click.Context) -> None:
     from vox.client.app import run_client
 
     click.echo("Starting vox client...")
-    asyncio.run(run_client())
+    try:
+        asyncio.run(run_client())
+    except RuntimeError as e:
+        # Exit non-zero so a supervisor (systemd Restart=on-failure) retries
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
 
 
 @main.command()

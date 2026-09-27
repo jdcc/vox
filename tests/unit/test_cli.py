@@ -64,6 +64,21 @@ def test_client_command(monkeypatch) -> None:
     run_client.assert_awaited_once()
 
 
+def test_client_command_startup_failure_exits_nonzero(monkeypatch) -> None:
+    runner = CliRunner()
+
+    def run_stub(coro):
+        coro.close()
+        raise RuntimeError("extension not available")
+
+    monkeypatch.setattr(asyncio, "run", run_stub)
+
+    result = runner.invoke(cli_module.main, ["client"])
+
+    assert result.exit_code == 1
+    assert "extension not available" in result.output
+
+
 def test_tui_command(monkeypatch) -> None:
     runner = CliRunner()
     run_tui = MagicMock()

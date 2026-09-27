@@ -22,6 +22,10 @@ SESSION_IFACE = "org.freedesktop.portal.Session"
 
 DEVICE_KEYBOARD = 1
 
+# Upper bound on waiting for a portal Response, including time for the user
+# to answer a permission dialog. Without it a lost request hangs forever.
+REQUEST_TIMEOUT = 120.0
+
 KEY_LEFTSHIFT = 42
 KEY_LEFTCTRL = 29
 KEY_V = 47
@@ -229,15 +233,12 @@ class PortalInput:
 
     async def _create_session(self) -> str:
         token = f"vox_{uuid.uuid4().hex}"
-        reply = await self._call(
-            path=DESKTOP_PATH,
-            interface=REMOTE_DESKTOP_IFACE,
+        response, results = await self._portal_request(
             member="CreateSession",
             signature="a{sv}",
-            body=[{"session_handle_token": Variant("s", token)}],
+            args=[],
+            options={"session_handle_token": Variant("s", token)},
         )
-        request_path = reply[0]
-        response, results = await self._request(request_path)
         if response != 0:
             raise PortalInputError("Portal session creation rejected")
         session_handle = results.get("session_handle")
@@ -246,52 +247,67 @@ class PortalInput:
         return session_handle.value
 
     async def _select_devices(self, device_mask: int) -> None:
-        reply = await self._call(
-            path=DESKTOP_PATH,
-            interface=REMOTE_DESKTOP_IFACE,
+        response, _results = await self._portal_request(
             member="SelectDevices",
             signature="oa{sv}",
-            body=[self._session_handle, {"types": Variant("u", device_mask)}],
+            args=[self._session_handle],
+            options={"types": Variant("u", device_mask)},
         )
-        request_path = reply[0]
-        response, _results = await self._request(request_path)
         if response != 0:
             raise PortalInputError("Portal select devices rejected")
 
     async def _start_session(self, device_mask: int) -> None:
-        reply = await self._call(
-            path=DESKTOP_PATH,
-            interface=REMOTE_DESKTOP_IFACE,
+        response, _results = await self._portal_request(
             member="Start",
             signature="osa{sv}",
-            body=[self._session_handle, "", {"devices": Variant("u", device_mask)}],
+            args=[self._session_handle, ""],
+            options={"devices": Variant("u", device_mask)},
         )
-        request_path = reply[0]
-        response, _results = await self._request(request_path)
         if response != 0:
             raise PortalInputError("Portal session start rejected")
 
-    async def _request(self, request_path: str) -> tuple[int, dict[str, Variant]]:
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[tuple[int, dict[str, Variant]]] = loop.create_future()
+    async def _portal_request(
+        self,
+        member: str,
+        signature: str,
+        args: list,
+        options: dict[str, Variant],
+    ) -> tuple[int, dict[str, Variant]]:
+        """Call a RemoteDesktop method that answers via a Request Response signal.
 
-        def _handler(message: Message) -> bool:
-            if message.message_type != MessageType.SIGNAL:
-                return False
-            if message.path != request_path:
-                return False
-            if message.interface != REQUEST_IFACE or message.member != "Response":
-                return False
-            response, results = message.body
-            if not future.done():
-                future.set_result((response, results))
-            return True
+        Each call gets a unique handle_token. Without one the portal falls
+        back to the fixed token "t", so back-to-back requests collide on the
+        same Request object path and the portal never answers. The Response
+        handler is registered on the predicted path before calling, so a
+        response that arrives immediately can't be missed.
+        """
+        if not self._bus:
+            raise PortalInputError("Portal bus not connected")
+        token = f"vox_{uuid.uuid4().hex}"
+        sender = self._bus.unique_name.lstrip(":").replace(".", "_")
+        request_path = f"{DESKTOP_PATH}/request/{sender}/{token}"
 
-        self._bus.add_message_handler(_handler)
+        future: asyncio.Future[tuple[int, dict[str, Variant]]] = (
+            asyncio.get_running_loop().create_future()
+        )
+        handler = _response_handler(request_path, future)
+        self._bus.add_message_handler(handler)
         try:
-            return await future
+            await self._call(
+                path=DESKTOP_PATH,
+                interface=REMOTE_DESKTOP_IFACE,
+                member=member,
+                signature=signature,
+                body=[*args, {**options, "handle_token": Variant("s", token)}],
+            )
+            return await asyncio.wait_for(future, REQUEST_TIMEOUT)
+        except asyncio.TimeoutError as exc:
+            raise PortalInputError(
+                f"Timed out after {REQUEST_TIMEOUT:.0f}s waiting for portal {member} response "
+                "(permission dialog unanswered?)"
+            ) from exc
         finally:
-            self._bus.remove_message_handler(_handler)
+            self._bus.remove_message_handler(handler)
 
     async def _call(
         self,
@@ -315,3 +331,24 @@ class PortalInput:
         if reply.message_type == MessageType.ERROR:
             raise PortalInputError(reply.error_name or "Portal call failed")
         return reply.body
+
+
+def _response_handler(
+    request_path: str,
+    future: asyncio.Future[tuple[int, dict[str, Variant]]],
+) -> Callable[[Message], bool]:
+    """Build a bus message handler that resolves future with a Request's Response."""
+
+    def handler(message: Message) -> bool:
+        if message.message_type != MessageType.SIGNAL:
+            return False
+        if message.path != request_path:
+            return False
+        if message.interface != REQUEST_IFACE or message.member != "Response":
+            return False
+        response, results = message.body
+        if not future.done():
+            future.set_result((response, results))
+        return True
+
+    return handler

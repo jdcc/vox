@@ -237,7 +237,7 @@ class Server:
                 })
             )
 
-            final_text = await self.agent.process(result.text)
+            final_text = await self._apply_agent(result.text)
 
             await websocket.send(
                 json.dumps({
@@ -254,6 +254,24 @@ class Server:
                     "processing": False,
                 })
             )
+
+    async def _apply_agent(self, text: str) -> str:
+        """Run the agent over transcribed text, falling back to the raw text.
+
+        An LLM failure (missing API key, network error, rate limit) shouldn't
+        cost the user their dictation, so return the transcription unchanged.
+
+        Args:
+            text: Transcribed text
+
+        Returns:
+            Agent output, or the original text if the agent failed
+        """
+        try:
+            return await self.agent.process(text)
+        except Exception as e:
+            logger.warning(f"Agent processing failed, returning raw transcription: {e}")
+            return text
 
 
 async def run_server(host: str | None = None, port: int | None = None) -> None:
