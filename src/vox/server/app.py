@@ -46,6 +46,7 @@ class Server:
         self.config = config or load_config()
         self.transcriber: Transcriber | None = None
         self.agent: AgentProcessor | None = None
+        self._warmup_task: asyncio.Task | None = None
         self._server: websockets.WebSocketServer | None = None
 
     async def start(self, host: str | None = None, port: int | None = None) -> None:
@@ -63,6 +64,7 @@ class Server:
 
         logger.info("Initializing agent processor...")
         self.agent = AgentProcessor(self.config)
+        self._warmup_task = asyncio.create_task(self.agent.warm_up())
 
         logger.info(f"Starting server on {host}:{port}")
 

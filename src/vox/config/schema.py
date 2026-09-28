@@ -55,6 +55,7 @@ class LLMConfig(BaseModel):
     provider: str = "anthropic"
     model: str = "claude-sonnet-4-20250514"
     api_key: str = Field(default="")
+    api_base: str = ""  # OpenAI-compatible endpoint, e.g. a local llama-server
 
     def get_api_key(self) -> str:
         """Get API key, expanding environment variables."""
@@ -69,6 +70,7 @@ class AgentConfig(BaseModel):
 
     enabled: bool = True
     keyword: str = "Agent"
+    user_name: str = ""  # Used to sign emails the agent writes
     llm: LLMConfig = Field(default_factory=LLMConfig)
 
 
@@ -158,10 +160,15 @@ overlay:
 agent:
   enabled: true
   keyword: Agent
-  llm:
-    provider: anthropic
-    model: claude-sonnet-4-20250514
-    api_key: ${ANTHROPIC_API_KEY}
+  user_name: ""              # Your name, used to sign emails the agent writes
+  llm:                       # Local llama-server (see systemd/vox-llm.service)
+    provider: openai         # llama-server speaks the OpenAI API
+    model: gemma-4-e2b
+    api_base: http://127.0.0.1:8090/v1
+    # Hosted alternative:
+    # provider: anthropic
+    # model: claude-sonnet-4-20250514
+    # api_key: ${ANTHROPIC_API_KEY}
 """
         with open(config_path, "w") as f:
             f.write(default_config)

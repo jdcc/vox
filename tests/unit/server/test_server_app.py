@@ -340,6 +340,7 @@ async def test_start_server(monkeypatch) -> None:
     server = Server(config=Config())
     transcriber = MagicMock()
     agent = MagicMock()
+    agent.warm_up = AsyncMock()
     monkeypatch.setattr(app_module.Transcriber, "from_config", MagicMock(return_value=transcriber))
     monkeypatch.setattr(app_module, "AgentProcessor", MagicMock(return_value=agent))
 
@@ -349,9 +350,11 @@ async def test_start_server(monkeypatch) -> None:
     monkeypatch.setattr(app_module.websockets, "serve", serve_mock)
 
     await server.start(host="127.0.0.1", port=9999)
+    await server._warmup_task
 
     serve_mock.assert_awaited_once()
     ws_server.wait_closed.assert_awaited_once()
+    agent.warm_up.assert_awaited_once()
 
 
 @pytest.mark.asyncio

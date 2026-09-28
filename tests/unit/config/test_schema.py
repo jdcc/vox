@@ -132,6 +132,7 @@ class TestLLMConfig:
         assert config.provider == "anthropic"
         assert config.model == "claude-sonnet-4-20250514"
         assert config.api_key == ""
+        assert config.api_base == ""
 
     def test_get_api_key_direct(self):
         config = LLMConfig(api_key="sk-12345")
@@ -164,6 +165,7 @@ class TestAgentConfig:
         config = AgentConfig()
         assert config.enabled is True
         assert config.keyword == "Agent"
+        assert config.user_name == ""
         assert isinstance(config.llm, LLMConfig)
 
     def test_custom_values(self):

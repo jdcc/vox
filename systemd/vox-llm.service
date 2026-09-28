@@ -1,0 +1,20 @@
+[Unit]
+Description=Vox local LLM (llama-server: Gemma 4 E2B + MTP drafter)
+After=network.target
+
+[Service]
+Type=simple
+# Model paths; override with `systemctl --user edit vox-llm` (systemd needs a literal program path).
+Environment=VOX_LLM_MODEL=%h/llms/models/gemma4/gemma-4-E2B_q4_0-it.gguf
+Environment=VOX_LLM_DRAFT=%h/llms/models/gemma4-assistant/gemma-4-E2B-assistant-q8_0.gguf
+# Tuned for an i5-1340P with single-channel DDR4 (see ~/llms/results/SUMMARY.md):
+# 4 decode threads saturate memory bandwidth, 12 threads speed up prompt processing, MTP drafts 3 tokens,
+# one slot per system prompt (transform/generate) with a full SWA cache so both prefixes stay cached,
+# and no hidden "thinking" tokens (vox wants the answer only).
+ExecStart=%h/llms/llama.cpp/build/bin/llama-server -m ${VOX_LLM_MODEL} -md ${VOX_LLM_DRAFT} --spec-type draft-mtp \
+    --reasoning off -t 4 -tb 12 -fa on -c 16384 -np 2 --swa-full --host 127.0.0.1 --port 8090 --no-webui
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

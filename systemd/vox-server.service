@@ -1,6 +1,7 @@
 [Unit]
 Description=Vox Speech-to-Text Server
-After=network.target
+After=network.target vox-llm.service
+Wants=vox-llm.service
 
 [Service]
 Type=simple

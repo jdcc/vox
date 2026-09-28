@@ -127,25 +127,27 @@ install-services:
 	@# pin the absolute uv path instead of relying on /usr/bin/env lookup.
 	@sed "s|/usr/bin/env uv|$(UV_BIN)|" systemd/vox-server.service > ~/.config/systemd/user/vox-server.service
 	@sed "s|/usr/bin/env uv|$(UV_BIN)|" systemd/vox-client.service > ~/.config/systemd/user/vox-client.service
+	@cp systemd/vox-llm.service ~/.config/systemd/user/vox-llm.service
 	@systemctl --user daemon-reload
-	@systemctl --user enable vox-server.service vox-client.service
+	@systemctl --user enable vox-llm.service vox-server.service vox-client.service
 	@echo ""
 	@echo "Services installed and enabled."
 	@echo "They will start automatically on login."
 	@echo ""
 	@echo "To start now:"
-	@echo "  systemctl --user start vox-server vox-client"
+	@echo "  systemctl --user start vox-llm vox-server vox-client"
 	@echo ""
 	@echo "To check status:"
-	@echo "  systemctl --user status vox-server vox-client"
+	@echo "  systemctl --user status vox-llm vox-server vox-client"
 	@echo ""
 
 uninstall-services:
 	@echo "Uninstalling Vox systemd user services..."
-	@systemctl --user stop vox-server.service vox-client.service 2>/dev/null || true
-	@systemctl --user disable vox-server.service vox-client.service 2>/dev/null || true
+	@systemctl --user stop vox-llm.service vox-server.service vox-client.service 2>/dev/null || true
+	@systemctl --user disable vox-llm.service vox-server.service vox-client.service 2>/dev/null || true
 	@rm -f ~/.config/systemd/user/vox-server.service
 	@rm -f ~/.config/systemd/user/vox-client.service
+	@rm -f ~/.config/systemd/user/vox-llm.service
 	@systemctl --user daemon-reload
 	@echo "Services uninstalled."
 
